@@ -1,5 +1,6 @@
 #include "hardware/device/dji_motor.hpp"
 #include "hardware/device/dr16.hpp"
+#include "hardware/device/bmi088.hpp"
 #include "librmcs/client/cboard.hpp"
 #include <rcl/publisher.h>
 #include <rclcpp/logger.hpp>
@@ -19,6 +20,7 @@ public:
         , logger_(get_logger())
         , CBoard_command_(create_partner_component<CBoardCommand>(get_component_name() + "_command", *this))
         , dr16_(*this)
+        , bmi088_(1000, 0.2, 0.0)
         , m2006_left(*this, *CBoard_command_, "/example/m2006_left")
         , m2006_right(*this, *CBoard_command_, "/example/m2006_right")
         , transmit_buffer_(*this, 32)
@@ -26,6 +28,20 @@ public:
 
         m2006_left.configure(device::DjiMotor::Config{device::DjiMotor::Type::M2006});
         m2006_right.configure(device::DjiMotor::Config{device::DjiMotor::Type::M2006});
+        register_output("/gimbal/pitch/velocity_imu", gimbal_pitch_velocity_imu_);
+        register_output("/gimbal/row/velocity_imu", gimbal_row_velocity_imu_);
+        bmi088_.set_coordinate_mapping([](double x, double y, double z) {
+            // Get the mapping with the following code.
+            // The rotation angle must be an exact multiple of 90 degrees, otherwise use a matrix.
+
+            // Eigen::AngleAxisd pitch_link_to_imu_link{
+            //     std::numbers::pi / 2, Eigen::Vector3d::UnitZ()};
+            // Eigen::Vector3d mapping = pitch_link_to_imu_link * Eigen::Vector3d{1, 2, 3};
+            // std::cout << mapping << std::endl;
+
+            return std::make_tuple(-y, x, z);
+        });
+    
     }
 
     ~DeviceExample() override {
@@ -36,6 +52,14 @@ public:
     void update() override {
         dr16_.update_status();
         update_motors();
+    }
+
+    void update_imu() {
+        bmi088_.update_status();
+        Eigen::Quaterniond gimbal_imu_pose{bmi088_.q0(), bmi088_.q1(), bmi088_.q2(), bmi088_.q3()};
+
+        *gimbal_row_velocity_imu_   = bmi088_.gx();
+        *gimbal_pitch_velocity_imu_ = bmi088_.gy();
     }
 
     void command_update() {
@@ -101,6 +125,15 @@ protected:
         dr16_.store_status(uart_data, uart_data_length);
     }
 
+    void accelerometer_receive_callback(int16_t x, int16_t y, int16_t z) override {
+        bmi088_.store_accelerometer_status(x, y, z);
+    }
+
+    void gyroscope_receive_callback(int16_t x, int16_t y, int16_t z) override {
+        bmi088_.store_gyroscope_status(x, y, z);
+    }
+
+
 private:
     rclcpp::Logger logger_;
 
@@ -117,9 +150,14 @@ private:
 
     // device
     device::Dr16 dr16_;
+    device::Bmi088 bmi088_;
 
     device::DjiMotor m2006_left;
     device::DjiMotor m2006_right;
+
+    OutputInterface<double> gimbal_row_velocity_imu_;
+    OutputInterface<double> gimbal_pitch_velocity_imu_;
+
     librmcs::client::CBoard::TransmitBuffer transmit_buffer_;
     std::thread event_thread_;
 };
