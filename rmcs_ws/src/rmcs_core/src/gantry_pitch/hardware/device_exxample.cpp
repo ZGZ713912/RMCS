@@ -1,6 +1,3 @@
-// 外设调用：以dr16为例
-// 驱动电机：以GM6020为例
-
 #include "hardware/device/dji_motor.hpp"
 #include "hardware/device/dr16.hpp"
 #include "librmcs/client/cboard.hpp"
@@ -22,11 +19,13 @@ public:
         , logger_(get_logger())
         , CBoard_command_(create_partner_component<CBoardCommand>(get_component_name() + "_command", *this))
         , dr16_(*this)
-        , gm6020_(*this, *CBoard_command_, "/example/gm6020")
+        , m2006_left(*this, *CBoard_command_, "/example/m2006_left")
+        , m2006_right(*this, *CBoard_command_, "/example/m2006_right")
         , transmit_buffer_(*this, 32)
         , event_thread_([this]() { handle_events(); }) {
 
-        gm6020_.configure(device::DjiMotor::Config{device::DjiMotor::Type::GM6020});
+        m2006_left.configure(device::DjiMotor::Config{device::DjiMotor::Type::M2006});
+        m2006_right.configure(device::DjiMotor::Config{device::DjiMotor::Type::M2006});
     }
 
     ~DeviceExample() override {
@@ -42,8 +41,8 @@ public:
     void command_update() {
         uint16_t can_commands[4];
 
-        can_commands[0] = gm6020_.generate_command();
-        can_commands[1] = 0;
+        can_commands[0] = m2006_left.generate_command();
+        can_commands[1] = m2006_right.generate_command();
         can_commands[2] = 0;
         can_commands[3] = 0;
         transmit_buffer_.add_can1_transmission(0x1FE, std::bit_cast<uint64_t>(can_commands));
@@ -70,7 +69,10 @@ public:
     }
 
 private:
-    void update_motors() { gm6020_.update_status(); }
+    void update_motors() { 
+        m2006_left.update_status(); 
+        m2006_right.update_status();
+    }
 
 protected:
     void can1_receive_callback(
@@ -80,7 +82,10 @@ protected:
             return;
 
         if (can_id == 0x205) {
-            gm6020_.store_status(can_data);
+            m2006_left.store_status(can_data);
+        }
+        if (can_id == 0x206) {
+            m2006_right.store_status(can_data);
         }
     }
 
@@ -113,8 +118,8 @@ private:
     // device
     device::Dr16 dr16_;
 
-    device::DjiMotor gm6020_;
-
+    device::DjiMotor m2006_left;
+    device::DjiMotor m2006_right;
     librmcs::client::CBoard::TransmitBuffer transmit_buffer_;
     std::thread event_thread_;
 };

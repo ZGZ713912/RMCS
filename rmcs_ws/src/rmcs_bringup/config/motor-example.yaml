@@ -4,18 +4,28 @@ rmcs_executor:
     components:
       - rmcs_core::hardware::DeviceExample -> cboard_example
       - rmcs_core::example::RemoteControllerExample -> remote_control_message
-      - rmcs_core::controller::pid::PidController -> gm6020_velicity_controller
+      - rmcs_core::controller::pid::PidController -> left_m2006_velicity_controller
+      - rmcs_core::controller::pid::PidController -> right_m2006_velicity_controller
 
 
 cboard_example:
   ros__parameters:
     usb_pid: -1
 
-gm6020_velicity_controller:
+left_m2006_velicity_controller:
   ros__parameters:
-    setpoint: /example/gm6020/control_velocity
-    measurement: /example/gm6020/velocity
-    control: /example/gm6020/control_torque
+    setpoint: /example/m2006/left_control_velocity
+    measurement: /example/m2006/left_velocity
+    control: /example/m2006/left_control_torque
+    kp: 10.0
+    ki: 0.0
+    kd: 0.0
+
+right_m2006_velicity_controller:
+  ros__parameters:
+    setpoint: /example/m2006/right_control_velocity
+    measurement: /example/m2006/right_velocity
+    control: /example/m2006/right_control_torque
     kp: 10.0
     ki: 0.0
     kd: 0.0

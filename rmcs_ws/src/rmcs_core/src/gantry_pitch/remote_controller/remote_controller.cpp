@@ -19,7 +19,8 @@ public:
         register_input("/remote/switch/left", remote_left_switch_);
         register_input("/remote/switch/right", remote_right_switch_);
 
-        register_output("/example/gm6020/control_velocity", motor_control_velocity_);
+        register_output("/example/m2006_left/control_velocity", left_motor_control_velocity_);
+        register_output("/example/m2006_right/control_velocity", right_motor_control_velocity_);
     }
 
     void update() override {
@@ -28,7 +29,8 @@ public:
             && (*remote_right_switch_ == Switch::DOWN || *remote_right_switch_ == Switch::UNKNOWN)) {
             // stop all !!
         } else {
-            *motor_control_velocity_ = 20 * remote_left_joystic_->x();
+            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x();
+            *right_motor_control_velocity_ = 20 * remote_left_joystic_->x();
             // RCLCPP_INFO(get_logger(), "%lf", *motor_control_velocity_);
         }
     }
@@ -42,7 +44,8 @@ private:
     InputInterface<Eigen::Vector2d> remote_left_joystic_;
     InputInterface<Eigen::Vector2d> remote_right_joystic_;
 
-    OutputInterface<double> motor_control_velocity_;
+    OutputInterface<double> left_motor_control_velocity_;
+    OutputInterface<double> right_motor_control_velocity_;
 };
 
 } // namespace rmcs_core::example
