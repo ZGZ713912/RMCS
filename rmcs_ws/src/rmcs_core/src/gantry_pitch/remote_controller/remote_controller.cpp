@@ -4,6 +4,7 @@
 #include <rclcpp/node.hpp>
 #include <rmcs_executor/component.hpp>
 #include <rmcs_msgs/switch.hpp>
+#include </workspaces/RMCS/rmcs_ws/src/rmcs_core/src/filter/low_pass_filter.hpp>
 
 namespace rmcs_core::example {
 class RemoteControllerExample
@@ -24,6 +25,7 @@ public:
 
         register_output("/example/m2006_left/control_velocity", left_motor_control_velocity_);
         register_output("/example/m2006_right/control_velocity", right_motor_control_velocity_);
+        
     }
 
     void update() override {
@@ -32,8 +34,8 @@ public:
             && (*remote_right_switch_ == Switch::DOWN || *remote_right_switch_ == Switch::UNKNOWN)) {
             // stop all !!
         } else {
-            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x() ;
-            *right_motor_control_velocity_ = 20 * remote_left_joystic_->x();
+            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x() + 20 * *gimbal_row_velocity_imu_;
+            *right_motor_control_velocity_ = 20 * remote_left_joystic_->x() - 20 * *gimbal_row_velocity_imu_;
             // RCLCPP_INFO(get_logger(), "%lf", *motor_control_velocity_);
         }
     }

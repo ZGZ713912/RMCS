@@ -59,8 +59,8 @@ public:
         bmi088_.update_status();
         Eigen::Quaterniond gimbal_imu_pose{bmi088_.q0(), bmi088_.q1(), bmi088_.q2(), bmi088_.q3()};
 
-        *gimbal_row_velocity_imu_   = bmi088_.gx();
-        *gimbal_pitch_velocity_imu_ = bmi088_.gy();
+        *gimbal_row_velocity_imu_   = bmi088_.ay();
+        *gimbal_pitch_velocity_imu_ = bmi088_.ax();
 
   //      RCLCPP_INFO(logger_, "IMU Pit %.4f rad", bmi088_.gy());
   //      RCLCPP_INFO(logger_, "IMU Row %.4f rad", bmi088_.gx());
