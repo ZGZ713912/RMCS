@@ -1,3 +1,4 @@
+#include <cmath>
 #include "hardware/device/dji_motor.hpp"
 #include "hardware/device/dr16.hpp"
 #include "hardware/device/bmi088.hpp"
@@ -6,6 +7,7 @@
 #include <rclcpp/logger.hpp>
 #include <rclcpp/node.hpp>
 #include <rmcs_executor/component.hpp>
+#include "filter/low_pass_filter.hpp"
 namespace rmcs_core::hardware {
 
 class DeviceExample
@@ -18,6 +20,8 @@ public:
         : Node{get_component_name(), rclcpp::NodeOptions{}.automatically_declare_parameters_from_overrides(true)}
         , librmcs::client::CBoard{static_cast<int>(get_parameter("usb_pid").as_int())}
         , logger_(get_logger())
+        , row_filter_(10.0,1000.0)
+        ,pitch_filter_(10.0,1000.0)
         , CBoard_command_(create_partner_component<CBoardCommand>(get_component_name() + "_command", *this))
         , dr16_(*this)
         , bmi088_(1000, 0.2, 0.0)
@@ -38,10 +42,8 @@ public:
             //     std::numbers::pi / 2, Eigen::Vector3d::UnitZ()};
             // Eigen::Vector3d mapping = pitch_link_to_imu_link * Eigen::Vector3d{1, 2, 3};
             // std::cout << mapping << std::endl;
-
             return std::make_tuple(-y, x, z);
         });
-    
     }
 
     ~DeviceExample() override {
@@ -59,8 +61,8 @@ public:
         bmi088_.update_status();
         Eigen::Quaterniond gimbal_imu_pose{bmi088_.q0(), bmi088_.q1(), bmi088_.q2(), bmi088_.q3()};
 
-        *gimbal_row_velocity_imu_   = bmi088_.ay();
-        *gimbal_pitch_velocity_imu_ = bmi088_.ax();
+        *gimbal_row_velocity_imu_   = row_filter_.update(bmi088_.ay());
+        *gimbal_pitch_velocity_imu_ = pitch_filter_.update(std::asin(bmi088_.ax()));
 
   //      RCLCPP_INFO(logger_, "IMU Pit %.4f rad", bmi088_.gy());
   //      RCLCPP_INFO(logger_, "IMU Row %.4f rad", bmi088_.gx());
@@ -140,6 +142,8 @@ protected:
 
 private:
     rclcpp::Logger logger_;
+    rmcs_core::filter::LowPassFilter<1> row_filter_;
+    rmcs_core::filter::LowPassFilter<1> pitch_filter_;
 
     class CBoardCommand : public rmcs_executor::Component {
     public:
@@ -152,6 +156,7 @@ private:
     };
     std::shared_ptr<CBoardCommand> CBoard_command_;
 
+    
     // device
     device::Dr16 dr16_;
     device::Bmi088 bmi088_;

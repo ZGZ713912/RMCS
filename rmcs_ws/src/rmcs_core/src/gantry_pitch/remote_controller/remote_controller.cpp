@@ -33,9 +33,14 @@ public:
         if ((*remote_left_switch_ == Switch::DOWN || *remote_left_switch_ == Switch::UNKNOWN)
             && (*remote_right_switch_ == Switch::DOWN || *remote_right_switch_ == Switch::UNKNOWN)) {
             // stop all !!
+        } else if ((*remote_left_switch_ == Switch::UP )
+            && (*remote_right_switch_ == Switch::UP )) {
+            *left_motor_control_velocity_ = 800 * (*gimbal_pitch_velocity_imu_ - 0.523598) + 50 * *gimbal_row_velocity_imu_;
+            *right_motor_control_velocity_ = 800 * (*gimbal_pitch_velocity_imu_ - 0.523598) - 50 * *gimbal_row_velocity_imu_;
+            // turn to pi/6
         } else {
-            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x() + 20 * *gimbal_row_velocity_imu_;
-            *right_motor_control_velocity_ = 20 * remote_left_joystic_->x() - 20 * *gimbal_row_velocity_imu_;
+            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x() + 50 * *gimbal_row_velocity_imu_;
+            *right_motor_control_velocity_ = 20 * remote_left_joystic_->x() - 50 * *gimbal_row_velocity_imu_;
             // RCLCPP_INFO(get_logger(), "%lf", *motor_control_velocity_);
         }
     }

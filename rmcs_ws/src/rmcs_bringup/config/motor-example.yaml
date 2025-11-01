@@ -18,7 +18,7 @@ left_m2006_velocity_controller:
     measurement: /example/m2006_left/velocity
     control: /example/m2006_left/control_torque
     kp: 3.0
-    ki: 0.1
+    ki: 0.3
     kd: 0.2
 
 right_m2006_velocity_controller:
@@ -27,7 +27,7 @@ right_m2006_velocity_controller:
     measurement: /example/m2006_right/velocity
     control: /example/m2006_right/control_torque
     kp: 3.0
-    ki: 0.1
+    ki: 0.3
     kd: 0.2
 
 broadcaster:
