@@ -17,7 +17,7 @@ left_m2006_velocity_controller:
     setpoint: /example/m2006_left/control_velocity
     measurement: /example/m2006_left/velocity
     control: /example/m2006_left/control_torque
-    kp: 10.0
+    kp: 1.0
     ki: 0.0
     kd: 0.0
 
@@ -26,6 +26,6 @@ right_m2006_velocity_controller:
     setpoint: /example/m2006_right/control_velocity
     measurement: /example/m2006_right/velocity
     control: /example/m2006_right/control_torque
-    kp: 10.0
+    kp: 1.0
     ki: 0.0
     kd: 0.0

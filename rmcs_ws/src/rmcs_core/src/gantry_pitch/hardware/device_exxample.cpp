@@ -52,6 +52,7 @@ public:
     void update() override {
         dr16_.update_status();
         update_motors();
+        update_imu();
     }
 
     void update_imu() {
@@ -60,19 +61,22 @@ public:
 
         *gimbal_row_velocity_imu_   = bmi088_.gx();
         *gimbal_pitch_velocity_imu_ = bmi088_.gy();
+
+  //      RCLCPP_INFO(logger_, "IMU Pit %.4f rad", bmi088_.gy());
+  //      RCLCPP_INFO(logger_, "IMU Row %.4f rad", bmi088_.gx());
     }
 
     void command_update() {
         uint16_t can_commands[4];
 
-        can_commands[0] = m2006_left.generate_command();
-        can_commands[1] = m2006_right.generate_command();
+        can_commands[0] = 0;
+        can_commands[1] = 0;
         can_commands[2] = 0;
         can_commands[3] = 0;
         transmit_buffer_.add_can1_transmission(0x1FE, std::bit_cast<uint64_t>(can_commands));
 
-        can_commands[0] = 0;
-        can_commands[1] = 0;
+        can_commands[0] = m2006_left.generate_command();
+        can_commands[1] = m2006_right.generate_command();
         can_commands[2] = 0;
         can_commands[3] = 0;
         transmit_buffer_.add_can1_transmission(0x200, std::bit_cast<uint64_t>(can_commands));
@@ -105,10 +109,10 @@ protected:
         if (is_extended_can_id || is_remote_transmission || can_data_length < 8) [[unlikely]]
             return;
 
-        if (can_id == 0x205) {
+        if (can_id == 0x201) {
             m2006_left.store_status(can_data);
         }
-        if (can_id == 0x206) {
+        if (can_id == 0x202) {
             m2006_right.store_status(can_data);
         }
     }

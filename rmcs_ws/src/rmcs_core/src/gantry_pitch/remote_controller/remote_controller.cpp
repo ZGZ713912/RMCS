@@ -19,6 +19,9 @@ public:
         register_input("/remote/switch/left", remote_left_switch_);
         register_input("/remote/switch/right", remote_right_switch_);
 
+        register_input("/gimbal/pitch/velocity_imu", gimbal_pitch_velocity_imu_);
+        register_input("/gimbal/row/velocity_imu", gimbal_row_velocity_imu_);
+
         register_output("/example/m2006_left/control_velocity", left_motor_control_velocity_);
         register_output("/example/m2006_right/control_velocity", right_motor_control_velocity_);
     }
@@ -29,7 +32,7 @@ public:
             && (*remote_right_switch_ == Switch::DOWN || *remote_right_switch_ == Switch::UNKNOWN)) {
             // stop all !!
         } else {
-            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x();
+            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x() ;
             *right_motor_control_velocity_ = 20 * remote_left_joystic_->x();
             // RCLCPP_INFO(get_logger(), "%lf", *motor_control_velocity_);
         }
@@ -43,6 +46,9 @@ private:
 
     InputInterface<Eigen::Vector2d> remote_left_joystic_;
     InputInterface<Eigen::Vector2d> remote_right_joystic_;
+
+    InputInterface<double> gimbal_row_velocity_imu_;
+    InputInterface<double> gimbal_pitch_velocity_imu_;
 
     OutputInterface<double> left_motor_control_velocity_;
     OutputInterface<double> right_motor_control_velocity_;
