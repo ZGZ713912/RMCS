@@ -34,4 +34,6 @@ broadcaster:
   ros__parameters:
     forward_list:
       - /gimbal/pitch/velocity_imu
-      - /gimbal/row/velocity_imu
+      - /gimbal/roll/velocity_imu
+      - /example/m2006_left/control_velocity
+      - /example/m2006_right/control_velocity

@@ -21,7 +21,7 @@ public:
         register_input("/remote/switch/right", remote_right_switch_);
 
         register_input("/gimbal/pitch/velocity_imu", gimbal_pitch_velocity_imu_);
-        register_input("/gimbal/row/velocity_imu", gimbal_row_velocity_imu_);
+        register_input("/gimbal/roll/velocity_imu", gimbal_roll_velocity_imu_);
 
         register_output("/example/m2006_left/control_velocity", left_motor_control_velocity_);
         register_output("/example/m2006_right/control_velocity", right_motor_control_velocity_);
@@ -32,15 +32,17 @@ public:
         using namespace rmcs_msgs;
         if ((*remote_left_switch_ == Switch::DOWN || *remote_left_switch_ == Switch::UNKNOWN)
             && (*remote_right_switch_ == Switch::DOWN || *remote_right_switch_ == Switch::UNKNOWN)) {
+            *left_motor_control_velocity_ = 0;
+            *right_motor_control_velocity_ = 0;
             // stop all !!
         } else if ((*remote_left_switch_ == Switch::UP )
             && (*remote_right_switch_ == Switch::UP )) {
-            *left_motor_control_velocity_ = 800 * (*gimbal_pitch_velocity_imu_ - 0.523598) + 50 * *gimbal_row_velocity_imu_;
-            *right_motor_control_velocity_ = 800 * (*gimbal_pitch_velocity_imu_ - 0.523598) - 50 * *gimbal_row_velocity_imu_;
+            *left_motor_control_velocity_ = 100 * (*gimbal_pitch_velocity_imu_ - 0.523598) + 50 * *gimbal_roll_velocity_imu_;
+            *right_motor_control_velocity_ = 100 * (*gimbal_pitch_velocity_imu_ - 0.523598) - 50 * *gimbal_roll_velocity_imu_;
             // turn to pi/6
-        } else {
-            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x() + 50 * *gimbal_row_velocity_imu_;
-            *right_motor_control_velocity_ = 20 * remote_left_joystic_->x() - 50 * *gimbal_row_velocity_imu_;
+        }  else {
+            *left_motor_control_velocity_ = 20 * remote_left_joystic_->x() + 50 * *gimbal_roll_velocity_imu_;
+            *right_motor_control_velocity_ = 20 * remote_left_joystic_->x() - 50 * *gimbal_roll_velocity_imu_;
             // RCLCPP_INFO(get_logger(), "%lf", *motor_control_velocity_);
         }
     }
@@ -54,7 +56,7 @@ private:
     InputInterface<Eigen::Vector2d> remote_left_joystic_;
     InputInterface<Eigen::Vector2d> remote_right_joystic_;
 
-    InputInterface<double> gimbal_row_velocity_imu_;
+    InputInterface<double> gimbal_roll_velocity_imu_;
     InputInterface<double> gimbal_pitch_velocity_imu_;
 
     OutputInterface<double> left_motor_control_velocity_;

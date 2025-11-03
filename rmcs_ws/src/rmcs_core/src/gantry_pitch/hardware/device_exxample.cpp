@@ -20,7 +20,7 @@ public:
         : Node{get_component_name(), rclcpp::NodeOptions{}.automatically_declare_parameters_from_overrides(true)}
         , librmcs::client::CBoard{static_cast<int>(get_parameter("usb_pid").as_int())}
         , logger_(get_logger())
-        , row_filter_(10.0,1000.0)
+        , roll_filter_(10.0,1000.0)
         ,pitch_filter_(10.0,1000.0)
         , CBoard_command_(create_partner_component<CBoardCommand>(get_component_name() + "_command", *this))
         , dr16_(*this)
@@ -33,7 +33,7 @@ public:
         m2006_left.configure(device::DjiMotor::Config{device::DjiMotor::Type::M2006});
         m2006_right.configure(device::DjiMotor::Config{device::DjiMotor::Type::M2006});
         register_output("/gimbal/pitch/velocity_imu", gimbal_pitch_velocity_imu_);
-        register_output("/gimbal/row/velocity_imu", gimbal_row_velocity_imu_);
+        register_output("/gimbal/roll/velocity_imu", gimbal_roll_velocity_imu_);
         bmi088_.set_coordinate_mapping([](double x, double y, double z) {
             // Get the mapping with the following code.
             // The rotation angle must be an exact multiple of 90 degrees, otherwise use a matrix.
@@ -61,7 +61,7 @@ public:
         bmi088_.update_status();
         Eigen::Quaterniond gimbal_imu_pose{bmi088_.q0(), bmi088_.q1(), bmi088_.q2(), bmi088_.q3()};
 
-        *gimbal_row_velocity_imu_   = row_filter_.update(bmi088_.ay());
+        *gimbal_roll_velocity_imu_   = roll_filter_.update(bmi088_.ay());
         *gimbal_pitch_velocity_imu_ = pitch_filter_.update(std::asin(bmi088_.ax()));
 
   //      RCLCPP_INFO(logger_, "IMU Pit %.4f rad", bmi088_.gy());
@@ -142,7 +142,7 @@ protected:
 
 private:
     rclcpp::Logger logger_;
-    rmcs_core::filter::LowPassFilter<1> row_filter_;
+    rmcs_core::filter::LowPassFilter<1> roll_filter_;
     rmcs_core::filter::LowPassFilter<1> pitch_filter_;
 
     class CBoardCommand : public rmcs_executor::Component {
@@ -164,7 +164,7 @@ private:
     device::DjiMotor m2006_left;
     device::DjiMotor m2006_right;
 
-    OutputInterface<double> gimbal_row_velocity_imu_;
+    OutputInterface<double> gimbal_roll_velocity_imu_;
     OutputInterface<double> gimbal_pitch_velocity_imu_;
 
     librmcs::client::CBoard::TransmitBuffer transmit_buffer_;
