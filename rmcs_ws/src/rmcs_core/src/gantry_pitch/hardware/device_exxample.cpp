@@ -21,7 +21,7 @@ public:
         , librmcs::client::CBoard{static_cast<int>(get_parameter("usb_pid").as_int())}
         , logger_(get_logger())
         , roll_filter_(10.0,1000.0)
-        ,pitch_filter_(10.0,1000.0)
+        , pitch_filter_(10.0,1000.0)
         , CBoard_command_(create_partner_component<CBoardCommand>(get_component_name() + "_command", *this))
         , dr16_(*this)
         , bmi088_(1000, 0.2, 0.0)

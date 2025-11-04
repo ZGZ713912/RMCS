@@ -6,6 +6,8 @@ rmcs_executor:
       - rmcs_core::example::RemoteControllerExample -> remote_control_message
       - rmcs_core::controller::pid::PidController -> left_m2006_velocity_controller
       - rmcs_core::controller::pid::PidController -> right_m2006_velocity_controller
+      - rmcs_core::controller::pid::PidController -> pitch_velocity_controller
+
       - rmcs_core::broadcaster::ValueBroadcaster -> broadcaster
 
 cboard_example:
@@ -17,23 +19,33 @@ left_m2006_velocity_controller:
     setpoint: /example/m2006_left/control_velocity
     measurement: /example/m2006_left/velocity
     control: /example/m2006_left/control_torque
-    kp: 3.0
-    ki: 0.3
-    kd: 0.2
+    kp: 0.3 
+    ki: 0.0
+    kd: 0.0
 
 right_m2006_velocity_controller:
   ros__parameters:
     setpoint: /example/m2006_right/control_velocity
     measurement: /example/m2006_right/velocity
     control: /example/m2006_right/control_torque
-    kp: 3.0
-    ki: 0.3
-    kd: 0.2
+    kp: 0.3
+    ki: 0.0
+    kd: 0.0
+
+pitch_velocity_controller:
+  ros__parameters:
+    setpoint: 0.5235987755982988  # 30 degrees in radians
+    measurement: /gimbal/pitch/velocity_imu
+    control: /gimbal/pitch/control_velocity
+    kp: 30.0
+    ki: 0.0
+    kd: 60.0
 
 broadcaster:
   ros__parameters:
     forward_list:
       - /gimbal/pitch/velocity_imu
       - /gimbal/roll/velocity_imu
-      - /example/m2006_left/control_velocity
-      - /example/m2006_right/control_velocity
+      - /example/m2006_left/control_torque
+      - /example/m2006_right/control_torque
+      - /gimbal/pitch/control_velocity
