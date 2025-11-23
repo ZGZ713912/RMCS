@@ -8,8 +8,6 @@ rmcs_executor:
       - rmcs_core::controller::pid::ErrorPidController -> yaw_angle_pid_controller
       - rmcs_core::controller::pid::PidController -> yaw_velocity_pid_controller
       - rmcs_core::controller::pid::ErrorPidController -> pitch_angle_pid_controller
-      - rmcs_core::controller::pid::PidController -> pitch_velocity_pid_controller
-
       - rmcs_core::controller::gimbal::ShootingController -> shooting_controller
   
       - rmcs_core::controller::pid::PidController -> left_friction_velocity_pid_controller
@@ -47,8 +45,8 @@ value_broadcaster:
 tunnel_infantry_hardware:
   ros__parameters:
     usb_pid: -1
-    yaw_motor_zero_point: 43417
-    pitch_motor_zero_point: 54062
+    yaw_motor_zero_point: 40265
+    pitch_motor_zero_point: 53345
     imu_gx_bias: +0.001294
     imu_gy_bias: -0.000584
     imu_gz_bias: +0.000445 # Updated at 30th July 21:28
@@ -85,18 +83,9 @@ pitch_angle_pid_controller:
   ros__parameters:
     measurement: /gimbal/pitch/control_angle_error
     control: /gimbal/pitch/control_velocity
-    kp: 20.0
+    kp: 30.0
     ki: 0.00
-    kd: 0.1
-
-pitch_velocity_pid_controller:
-  ros__parameters:
-    measurement: /gimbal/pitch/velocity_imu
-    setpoint: /gimbal/pitch/control_velocity
-    control: /gimbal/pitch/control_torque
-    kp: 40.0
-    ki: 0.000
-    kd: 0.0
+    kd: 0.02
 
 shooting_controller:
   ros__parameters:
@@ -104,8 +93,8 @@ shooting_controller:
       - /gimbal/left_friction
       - /gimbal/right_friction
     friction_velocities:
-      - 660.0
-      - 660.0
+      - 690.0
+      - 690.0
     friction_soft_start_stop_time: 1.0
     is_42mm: false
     bullets_per_feeder_turn: 8.0

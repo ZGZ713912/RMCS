@@ -97,6 +97,8 @@ target_link_libraries(
     ${PROJECT_NAME}_runtime
     ${PROJECT_NAME}_kernel
     ${PROJECT_NAME}_module
+    geometry_msgs::geometry_msgs__rosidl_typesupport_cpp
+    visualization_msgs::visualization_msgs__rosidl_typesupport_cpp
 )
 
 ## 安装配置

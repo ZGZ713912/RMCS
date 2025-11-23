@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 
+#include <cstdint>
 #include <limits>
 
 #include "geometry_msgs/msg/vector3_stamped.hpp"
@@ -9,6 +10,8 @@
 #include <fast_tf/rcl.hpp>
 #include <geometry_msgs/msg/transform.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <memory>
+#include <numbers>
 #include <rclcpp/logging.hpp>
 #include <rclcpp/node.hpp>
 #include <rclcpp/qos.hpp>
@@ -32,7 +35,9 @@ public:
     GimbalController()
         : Node(
               get_component_name(),
-              rclcpp::NodeOptions{}.automatically_declare_parameters_from_overrides(true)) {
+              rclcpp::NodeOptions{}.automatically_declare_parameters_from_overrides(true))
+        , command_component_(
+              create_partner_component<ShootCommand>(get_component_name() + "_command", *this)) {
         upper_limit_ = get_parameter("upper_limit").as_double() + (std::numbers::pi / 2);
         lower_limit_ = get_parameter("lower_limit").as_double() + (std::numbers::pi / 2);
 
@@ -71,21 +76,30 @@ public:
 
         gimbal_direction_subscription_ =
             this->create_subscription<geometry_msgs::msg::Vector3Stamped>(
-                "/alliacne_auto_aim/fire_control", rclcpp::QoS(10),
-                [&](geometry_msgs::msg::Vector3Stamped const& target_pos) {
-                    auto target_position = OdomImu::DirectionVector{
-                        Eigen::Vector3d{
-                                        target_pos.vector.x, target_pos.vector.y, target_pos.vector.z}
-                            .normalized()
+                "/alliance_auto_aim/fire_control", rclcpp::QoS(10),
+                [&](geometry_msgs::msg::Vector3Stamped const& data) {
+                    auto gimbal_dir = OdomImu::DirectionVector{
+                        Eigen::Vector3d{data.vector.x, data.vector.y, data.vector.z}
+                        .normalized()
                     };
 
-                    auto_aim_control_direction_ =
-                        fast_tf::cast<GimbalCenterLink>(target_position, *tf_);
+                    auto_aim_control_direction_ = gimbal_dir;
+
+                    last_topic_time_ = this->now();
                 });
     }
 
     void update() override {
         publish_sync_data();
+        auto pitch = -*gimbal_pitch_angle_;
+        while (pitch > std::numbers::pi) {
+            pitch = pitch - std::numbers::pi;
+        }
+        while (pitch <= -std::numbers::pi) {
+            pitch = pitch + std::numbers::pi;
+        }
+
+        // RCLCPP_INFO(this->get_logger(), "gimbal_pitch:%f", pitch * 57.3);
 
         update_yaw_axis();
         update_pitch_lk_motors_status();
@@ -129,7 +143,38 @@ public:
         }
     }
 
+    auto update_shoot_control() -> void {
+        auto now                      = this->now();
+        double seconds_since_last_msg = (now - last_topic_time_).seconds();
+        bool is_active                = seconds_since_last_msg < receive_auto_aim_commands_timeout_;
+        *shoot_control_               = is_active;
+
+        if (!is_active) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 2000,
+                "No auto_aim_shoot command! Last seen %.2fs ago", seconds_since_last_msg);
+
+            return;
+        }
+    }
+
 private:
+    class ShootCommand : public rmcs_executor::Component {
+    public:
+        explicit ShootCommand(GimbalController& gimbal_controller_component)
+            : gimbal_controller_(gimbal_controller_component) {
+
+            register_output(
+                "/gimbal/auto_aim/fire_control", gimbal_controller_.shoot_control_, false);
+        }
+
+        void update() override { gimbal_controller_.update_shoot_control(); }
+
+        GimbalController& gimbal_controller_;
+    };
+
+    std::shared_ptr<ShootCommand> command_component_;
+
     double calculate_feedback(double angle_error) {
         const double dt = 0.001;
 
@@ -273,7 +318,8 @@ private:
     }
 
     void update_auto_aim_control_direction(PitchLink::DirectionVector& dir) {
-        dir             = fast_tf::cast<PitchLink>(auto_aim_control_direction_, *tf_);
+        dir = fast_tf::cast<PitchLink>(auto_aim_control_direction_, *tf_);
+        dir->normalized();
         control_enabled = true;
     }
 
@@ -382,7 +428,7 @@ private:
     InputInterface<rmcs_msgs::ShootMode> shoot_mode_;
 
     // InputInterface<Eigen::Vector3d> auto_aim_control_direction_;
-    GimbalCenterLink::DirectionVector auto_aim_control_direction_{Eigen::Vector3d::Zero()};
+    OdomImu::DirectionVector auto_aim_control_direction_{Eigen::Vector3d::Zero()};
 
     bool control_enabled = false;
     OdomImu::DirectionVector control_direction_{Eigen::Vector3d::Zero()};
@@ -396,6 +442,10 @@ private:
     OutputInterface<rmcs_msgs::LkmotorStatus> yaw_motor_status_;
 
     OutputInterface<double> yaw_processed_output_;
+    OutputInterface<bool> shoot_control_;
+
+    const double receive_auto_aim_commands_timeout_ = 0.1;
+    rclcpp::Time last_topic_time_{0, 0, RCL_ROS_TIME};
 
     bool is_enable_            = false;
     bool pitch_last_is_enable_ = false;

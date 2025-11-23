@@ -86,9 +86,8 @@ struct fast_tf::Joint<rmcs_description::PitchLink> {
 template <>
 struct fast_tf::Joint<rmcs_description::MuzzleLink> {
     using Parent                   = rmcs_description::YawLink;
-    Eigen::Translation3d transform = Eigen::Translation3d{0.059, 0, 0};
+    Eigen::Translation3d transform = Eigen::Translation3d{0.0, 0.0, 0.101};
 };
-
 template <>
 struct fast_tf::Joint<rmcs_description::TransmitterLink> {
     using Parent                   = rmcs_description::PitchLink;
