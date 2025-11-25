@@ -76,7 +76,7 @@ public:
 
         gimbal_direction_subscription_ =
             this->create_subscription<geometry_msgs::msg::Vector3Stamped>(
-                "/alliance_auto_aim/fire_control", rclcpp::QoS(10),
+                "/alliance_auto_aim/fire_control", rclcpp::QoS(5),
                 [&](geometry_msgs::msg::Vector3Stamped const& data) {
                     auto gimbal_dir = OdomImu::DirectionVector{
                         Eigen::Vector3d{data.vector.x, data.vector.y, data.vector.z}
@@ -91,13 +91,6 @@ public:
 
     void update() override {
         publish_sync_data();
-        auto pitch = -*gimbal_pitch_angle_;
-        while (pitch > std::numbers::pi) {
-            pitch = pitch - std::numbers::pi;
-        }
-        while (pitch <= -std::numbers::pi) {
-            pitch = pitch + std::numbers::pi;
-        }
 
         // RCLCPP_INFO(this->get_logger(), "gimbal_pitch:%f", pitch * 57.3);
 
@@ -318,6 +311,9 @@ private:
     }
 
     void update_auto_aim_control_direction(PitchLink::DirectionVector& dir) {
+        if (auto_aim_control_direction_->isZero()) {
+            return;
+        }
         dir = fast_tf::cast<PitchLink>(auto_aim_control_direction_, *tf_);
         dir->normalized();
         control_enabled = true;
@@ -444,7 +440,7 @@ private:
     OutputInterface<double> yaw_processed_output_;
     OutputInterface<bool> shoot_control_;
 
-    const double receive_auto_aim_commands_timeout_ = 0.1;
+    const double receive_auto_aim_commands_timeout_ = 0.05;
     rclcpp::Time last_topic_time_{0, 0, RCL_ROS_TIME};
 
     bool is_enable_            = false;
