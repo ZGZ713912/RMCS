@@ -5,6 +5,7 @@ rmcs_executor:
       - rmcs_core::hardware::TunnelInfantry -> tunnel_infantry_hardware
 
       - rmcs_core::controller::gimbal::GimbalController -> gimbal_controller
+      - rmcs_core::controller::gimbal::GimbalFeedforward -> gimbal_feedward_controller
       - rmcs_core::controller::pid::ErrorPidController -> yaw_angle_pid_controller
       - rmcs_core::controller::pid::PidController -> yaw_velocity_pid_controller
       - rmcs_core::controller::pid::ErrorPidController -> pitch_angle_pid_controller
@@ -59,6 +60,14 @@ gimbal_controller:
   ros__parameters:
     upper_limit: -0.5098
     lower_limit: 0.2262
+
+gimbal_feedward_controller:
+  ros__parameters:
+    measurement: /gimbal/yaw/raw_control_torque
+    control: /gimbal/yaw/control_torque
+    kv: 0.2148
+    ka: 0.3823
+    firc: 7.2
 
 yaw_angle_pid_controller:
   ros__parameters:
