@@ -5,12 +5,57 @@ RoboMaster Control System based on ROS2.
 
 ## Development
 
+RMCS currently provides two development-container paths:
+
+- Default Linux container workflow for `x86-64 Linux / WSL2`
+- Apple Silicon Mac workflow for `macOS + Docker Desktop + VSCode Dev Containers`
+
 ### Pre-requirements:
 
 - x86-64 架构
 - 任意 Linux 发行版，或 WSL2（参见 [WSL2开发指南](docs/zh-cn/wsl2_develop_guide.md)）
 - [VSCode](https://code.visualstudio.com/)，安装 [Dev Containers 扩展](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
 - [安装 Docker 并 配置代理（部分国家或地区）](docs/zh-cn/docker_with_proxy.md)
+
+### Apple Silicon Mac Development (Experimental)
+
+如果你使用的是 Apple Silicon Mac，并希望在本机的 Docker Desktop 与 VSCode Dev Containers 中开发，可使用仓库内的 Mac 专用开发容器配置：
+
+- 入口文件：`.devcontainer/mac/devcontainer.json`
+- 面向场景：代码编辑、`clangd`、ROS2/C++ 构建、基础脚本
+- 不追求完全复刻 Linux 容器的硬件与图形能力
+
+支持的能力：
+
+- 在 VSCode 中打开 Dev Container
+- 使用 `build-rmcs` 构建工作区
+- 使用 `clean-rmcs` 清理构建产物
+- 使用 `clangd` 进行索引与代码提示
+
+当前不保证等价支持：
+
+- `--network host`
+- `/dev` 直通到容器的 USB / 串口 / 下位机访问
+- X11 / Wayland 图形转发
+- 在本机 Mac 容器中完整运行机器人硬件链路
+- 镜像构建阶段自动拉取的可选外部 SDK（例如 OpenVINO、Livox SDK）
+
+说明：
+Mac 开发容器默认将 Ubuntu ARM apt 源切换为 `https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports`，并将 ROS apt 源切换为 `https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu`，以降低 Docker Desktop 网络环境下访问官方仓库时出现的证书或握手失败概率。
+
+建议流程：
+
+1. 在 VSCode 中打开仓库。
+2. 运行 `Dev Containers: Open Folder in Container...`。
+3. 选择 `.devcontainer/mac/devcontainer.json`。
+4. 进入容器后，执行：
+
+```bash
+cp .vscode/settings.default.json .vscode/settings.json
+build-rmcs
+```
+
+如果后续需要接 USB、串口、相机、下位机，或进行更接近部署环境的运行验证，请切回 Linux / WSL2 / 远端部署链路。
 
 ### Step 1：获取镜像
 

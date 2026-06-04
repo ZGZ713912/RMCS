@@ -1,5 +1,8 @@
 #!/bin/bash
 
+source ~/env_setup.bash
+"${RMCS_PATH}/.script/mac-dev-warning" "ssh-remote"
+
 if [ -z "$1" ]; then
     ssh -X remote
 else

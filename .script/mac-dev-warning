@@ -1,0 +1,16 @@
+#! /bin/bash
+
+rmcs_dev_profile="${RMCS_DEV_PROFILE:-linux}"
+
+if [ "${rmcs_dev_profile}" != "mac" ]; then
+    exit 0
+fi
+
+command_name="${1:-this command}"
+
+cat <<EOF
+Warning: ${command_name} is running inside the RMCS Mac development container.
+This container is intended for editing, indexing, and builds on Apple Silicon Macs.
+Linux-specific runtime features such as USB device passthrough, host networking, and GUI forwarding are not guaranteed here.
+Use a Linux host or the existing remote deployment workflow for hardware-backed runtime tasks.
+EOF

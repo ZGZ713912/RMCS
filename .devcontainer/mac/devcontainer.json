@@ -1,0 +1,45 @@
+{
+	"name": "rmcs-develop-mac",
+	"build": {
+		"context": "../..",
+		"dockerfile": "../../Dockerfile",
+		"target": "rmcs-develop",
+		"args": {
+			"RMCS_DEV_PROFILE": "mac",
+			"RMCS_INSTALL_OPENVINO": "0",
+			"RMCS_INSTALL_LIVOX_SDK": "0",
+			"RMCS_ROS_APT_URI": "https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu",
+			"RMCS_UBUNTU_APT_URI": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
+		}
+	},
+	"remoteUser": "ubuntu",
+	"workspaceFolder": "/workspaces/RMCS",
+	"containerEnv": {
+		"RMCS_DEV_PROFILE": "mac",
+		"HTTP_PROXY": "http://host.docker.internal:7890",
+		"HTTPS_PROXY": "http://host.docker.internal:7890",
+		"http_proxy": "http://host.docker.internal:7890",
+		"https_proxy": "http://host.docker.internal:7890"
+	},
+	"mounts": [
+		"source=rmcs-colcon-build,target=/workspaces/RMCS/rmcs_ws/build,type=volume",
+		"source=rmcs-colcon-install,target=/workspaces/RMCS/rmcs_ws/install,type=volume",
+		"source=rmcs-colcon-log,target=/workspaces/RMCS/rmcs_ws/log,type=volume"
+	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"llvm-vs-code-extensions.vscode-clangd",
+				"ms-python.vscode-pylance",
+				"ms-python.python",
+				"ms-python.debugpy",
+				"twxs.cmake",
+				"streetsidesoftware.code-spell-checker",
+				"mhutchie.git-graph"
+			],
+			"settings": {
+				"terminal.integrated.defaultProfile.linux": "zsh"
+			}
+		}
+	}
+}

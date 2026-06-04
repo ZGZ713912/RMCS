@@ -8,75 +8,45 @@ import termios
 from colorama import Fore, Style
 
 
-# ============================================================
-# Terminal — spinner, raw input, prompt drawing
-# ============================================================
+def warn_mac_dev(command_name):
+    if os.environ.get("RMCS_DEV_PROFILE") != "mac":
+        return
 
-class Terminal:
-    SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    print(
+        f"Warning: {command_name} is running inside the RMCS Mac development container."
+    )
+    print(
+        "This container is intended for editing, indexing, and builds on Apple Silicon Macs."
+    )
+    print(
+        "Linux-specific runtime features such as USB device passthrough, host networking, "
+        "and GUI forwarding are not guaranteed here."
+    )
+    print(
+        "Use a Linux host or the existing remote deployment workflow for hardware-backed runtime tasks."
+    )
 
-    def __init__(self):
-        self._fd = sys.stdin.fileno()
-        self.buf = ""
 
-    def __enter__(self):
-        self._old = termios.tcgetattr(self._fd)
-        new = termios.tcgetattr(self._fd)
-        new[3] &= ~(termios.ECHO | termios.ICANON)
-        new[6][termios.VMIN] = 1
-        new[6][termios.VTIME] = 0
-        termios.tcsetattr(self._fd, termios.TCSANOW, new)
-        return self
+def main():
+    warn_mac_dev("set-remote")
 
-    def __exit__(self, *_):
-        termios.tcsetattr(self._fd, termios.TCSANOW, self._old)
-
-    def draw(self, discovered):
-        i = int(__import__("time").time() * 15) % len(self.SPINNER)
-        sp = self.SPINNER[i]
-        prompt = (
-            "Enter index to select or Ctrl+C to exit: "
-            if discovered
-            else "No addresses found. Enter index or Ctrl+C to exit: "
+    if len(sys.argv) <= 1 or len(sys.argv) > 2 or sys.argv[1] in ("-h", "--help"):
+        print("Usage: set-remote <remote_host>")
+        print("    1. IPv4 / IPv6 address (e.g., 169.254.233.233)")
+        print(
+            "    2. IPv4 / IPv6 link-local address (e.g., fe80::c6d0:e3ff:fed7:ed12%eth0)"
         )
-        sys.stdout.write(f"\r\033[K{sp} {prompt}{self.buf}")
-        sys.stdout.flush()
+        print("    3. mDNS hostname (e.g., my-sentry.local)")
+        sys.exit(1)
 
-    def handle_input(self, raw, discovered):
-        if raw == b"\x03":
-            raise KeyboardInterrupt
-        if raw in (b"\r", b"\n"):
-            stripped = self.buf.strip()
-            self.buf = ""
-            if stripped:
-                try:
-                    _, ip = discovered[int(stripped)]
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    return ip
-                except (ValueError, IndexError):
-                    pass
-            return None
-        elif raw in (b"\x7f", b"\x08"):
-            self.buf = self.buf[:-1]
-        elif len(raw) == 1 and 32 <= raw[0] <= 126:
-            self.buf += raw.decode()
-        return None
+    host_remote = sys.argv[1]
+    if host_remote.endswith(".local") or host_remote.endswith(".local."):
+        print("An mDNS hostname was provided. Will resolve it to an IP address.")
+        host_remote = mdns_lookup(host_remote)
 
-
-# ============================================================
-# MDNSClient — socket lifecycle, query, resend, response parsing
-# ============================================================
-
-class MDNSClient:
-
-    PORT = 5353
-    MCAST4 = "224.0.0.251"
-    MCAST6 = "ff02::fb"
-    RESEND_INTERVAL = 1.0
-    _DNS_HDR = (
-        b"\x00\x00\x01\x00\x00\x01\x00\x00"
-        b"\x00\x00\x00\x00\x00\x00\x01\x00\x01"
+    set_remote(host_remote)
+    print(
+        f"Successfully set remote host to {Fore.LIGHTGREEN_EX}{host_remote}{Style.RESET_ALL}."
     )
 
     def __init__(self, hostname):

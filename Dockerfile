@@ -14,6 +14,11 @@ ARG SYSROOT_IMAGE_ARM64=rmcs-base:latest
 FROM ros:jazzy AS rmcs-base
 ARG TARGETARCH
 
+ARG RMCS_INSTALL_OPENVINO=1
+ARG RMCS_INSTALL_LIVOX_SDK=1
+ARG RMCS_ROS_APT_URI=http://packages.ros.org/ros2/ubuntu
+ARG RMCS_UBUNTU_APT_URI=https://ports.ubuntu.com/ubuntu-ports
+
 # Change bash as default shell instead of sh
 SHELL ["/bin/bash", "-c"]
 
@@ -21,189 +26,161 @@ SHELL ["/bin/bash", "-c"]
 ENV TZ=Asia/Shanghai \
     DEBIAN_FRONTEND=noninteractive
 
-# Install tools and libraries.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    vim wget curl unzip \
-    zsh screen tmux \
-    usbutils net-tools iputils-ping \
-    gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-    ripgrep htop fzf \
-    libusb-1.0-0-dev \
-    libeigen3-dev \
-    libopencv-dev \
-    libgoogle-glog-dev \
-    libgflags-dev \
-    libatlas-base-dev \
-    libsuitesparse-dev \
-    libceres-dev \
-    ros-$ROS_DISTRO-rviz2 ros-$ROS_DISTRO-foxglove-bridge \
-    ros-$ROS_DISTRO-pcl-ros ros-$ROS_DISTRO-pcl-conversions ros-$ROS_DISTRO-pcl-msgs \
-    ros-$ROS_DISTRO-navigation2 ros-$ROS_DISTRO-nav2-msgs \
-    lua5.4 liblua5.4-0 liblua5.4-dev && \
-    apt-get clean && \
+# Make long dependency installs more tolerant of flaky networks.
+RUN printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+    > /etc/apt/apt.conf.d/80-retries
+
+# Allow the Ubuntu and ROS apt endpoints to be profile-specific.
+RUN grep -Rrl 'ports.ubuntu.com/ubuntu-ports' /etc/apt | \
+    xargs -r sed -Ei "s|https?://ports\\.ubuntu\\.com/ubuntu-ports|${RMCS_UBUNTU_APT_URI}|g" && \
+    grep -Rrl 'packages.ros.org/ros2/ubuntu' /etc/apt | \
+    xargs -r sed -Ei "s|https?://packages\\.ros\\.org/ros2/ubuntu|${RMCS_ROS_APT_URI}|g"
+
+# Disable source repositories during image builds to avoid flaky deb-src index fetches.
+RUN grep -Rrl '^[[:space:]]*deb-src[[:space:]]' /etc/apt | \
+    xargs -r sed -i 's|^[[:space:]]*deb-src|# deb-src|g' && \
+    grep -Rrl '^Types:[[:space:]].*deb-src' /etc/apt | \
+    xargs -r sed -Ei 's/^Types:[[:space:]]*deb[[:space:]]+deb-src$/Types: deb/'
+
+# Install command-line tools.
+RUN set -eux; \
+    restore_ros=0; \
+    if [ -f /etc/apt/sources.list.d/ros2.sources ]; then \
+        mv /etc/apt/sources.list.d/ros2.sources /tmp/ros2.sources.disabled; \
+        restore_ros=1; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        vim wget curl unzip \
+        zsh screen tmux \
+        usbutils net-tools iputils-ping \
+        ripgrep htop fzf \
+        unison; \
+    if [ "${restore_ros}" = "1" ]; then \
+        mv /tmp/ros2.sources.disabled /etc/apt/sources.list.d/ros2.sources; \
+    fi; \
+    apt-get autoremove -y; \
+    apt-get clean; \
     rm -rf /var/lib/apt/lists/* /tmp/*
 
-# Install Hik MVS runtime SDK and its runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libbz2-1.0 \
-    libgcc-s1 \
-    libstdc++6 \
-    libudev1 \
-    libusb-1.0-0 \
-    zlib1g && \
-    apt-get autoremove -y && apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/* && \
-    set -eux; \
-    case "${TARGETARCH}" in \
-        amd64) arch_tag=x86_64; arch_dir=64 ;; \
-        arm64) arch_tag=aarch64; arch_dir=aarch64 ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    download_url="https://github.com/Alliance-Algorithm/hik-mvs/releases/latest/download/mvs-sdk-${arch_tag}.tar.gz"; \
-    mkdir -p /tmp/mvs-src \
-        "/opt/mvs-usb3-core/lib/${arch_dir}" \
-        /opt/mvs-usb3-core/lib/cmake/MVSUSB3Core \
-        /opt/mvs-usb3-core/include \
-        /usr/local/bin; \
-    curl -fsSL -o /tmp/mvs.tar.gz "${download_url}"; \
-    tar -xzf /tmp/mvs.tar.gz -C /tmp/mvs-src; \
-    cp -a "/tmp/mvs-src/lib/${arch_dir}/." "/opt/mvs-usb3-core/lib/${arch_dir}/"; \
-    cp -a /tmp/mvs-src/include/. /opt/mvs-usb3-core/include/; \
-    rm -f "/opt/mvs-usb3-core/lib/${arch_dir}/libusb-1.0.so.0"; \
-    case "${TARGETARCH}" in \
-        amd64) \
-            rm -f \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libCLAllSerial_gcc485_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libCLProtocol_gcc485_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libCLSerCOM.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libCLSerHvc.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libGCBase_gcc485_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libGenCP_gcc485_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/liblog4cpp_gcc485_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libLog_gcc485_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCameraControlWrapper.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCameraControlWrapper.so.4.7.0.1" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCamLVision.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCamLVision.so.4.7.0.3" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMVGigEVisionSDK.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMVGigEVisionSDK.so.4.7.1.1" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMVFGControl.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvProducerVIR.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvLCProducer.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/MvLCProducer.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/MvProducerGEV.cti" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/MvFGProducerCML.cti" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/MvFGProducerCXP.cti" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/MvFGProducerGEV.cti" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/MvFGProducerXoF.cti"; \
-            ;; \
-        arm64) \
-            rm -f \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libCLAllSerial_gcc494_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libCLProtocol_gcc494_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libCLSerCOM.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libGCBase_gcc494_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libGenCP_gcc494_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/liblog4cpp_gcc494_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libLog_gcc494_v3_0.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCameraControlWrapper.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCameraControlWrapper.so.4.7.0.1" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCamLVision.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMvCamLVision.so.4.7.0.3" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMVGigEVisionSDK.so" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/libMVGigEVisionSDK.so.4.7.1.1" \
-                "/opt/mvs-usb3-core/lib/${arch_dir}/MvProducerGEV.cti"; \
-            ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    rm -rf /var/lib/apt/lists/* /tmp/mvs-src /tmp/mvs.tar.gz; \
-    cmake_dir=/opt/mvs-usb3-core/lib/cmake/MVSUSB3Core; \
-    <<EOF cat > "${cmake_dir}/MVSUSB3CoreConfig.cmake"
-get_filename_component(MVSUSB3Core_ROOT "\${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+# Install common development libraries.
+RUN set -eux; \
+    restore_ros=0; \
+    if [ -f /etc/apt/sources.list.d/ros2.sources ]; then \
+        mv /etc/apt/sources.list.d/ros2.sources /tmp/ros2.sources.disabled; \
+        restore_ros=1; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        libusb-1.0-0-dev \
+        libeigen3-dev \
+        libopencv-dev \
+        libgoogle-glog-dev \
+        libgflags-dev \
+        libatlas-base-dev \
+        libsuitesparse-dev \
+        libceres-dev; \
+    if [ "${restore_ros}" = "1" ]; then \
+        mv /tmp/ros2.sources.disabled /etc/apt/sources.list.d/ros2.sources; \
+    fi; \
+    apt-get autoremove -y; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /tmp/*
 
-set(MVSUSB3Core_INCLUDE_DIR "\${MVSUSB3Core_ROOT}/include")
-set(MVSUSB3Core_INCLUDE_DIRS "\${MVSUSB3Core_INCLUDE_DIR}")
-set(MVSUSB3Core_LIBRARY_DIR "\${MVSUSB3Core_ROOT}/lib/${arch_dir}")
-set(MVSUSB3Core_LIBRARY "\${MVSUSB3Core_LIBRARY_DIR}/libMvCameraControl.so")
-set(MVSUSB3Core_LIBRARIES "\${MVSUSB3Core_LIBRARY}")
-
-if(NOT EXISTS "\${MVSUSB3Core_INCLUDE_DIR}/MvCameraControl.h")
-  set(MVSUSB3Core_FOUND FALSE)
-  message(FATAL_ERROR "MVSUSB3Core headers not found under \${MVSUSB3Core_INCLUDE_DIR}")
-endif()
-
-if(NOT EXISTS "\${MVSUSB3Core_LIBRARY}")
-  set(MVSUSB3Core_FOUND FALSE)
-  message(FATAL_ERROR "MVSUSB3Core library libMvCameraControl.so not found under \${MVSUSB3Core_LIBRARY_DIR}")
-endif()
-
-if(NOT TARGET MVSUSB3Core::MVSUSB3Core)
-  add_library(MVSUSB3Core::MVSUSB3Core SHARED IMPORTED GLOBAL)
-  set_target_properties(MVSUSB3Core::MVSUSB3Core PROPERTIES
-    IMPORTED_LOCATION "\${MVSUSB3Core_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "\${MVSUSB3Core_INCLUDE_DIR}"
-  )
-endif()
-
-set(MVSUSB3Core_FOUND TRUE)
-EOF
+# Install ROS desktop dependencies and other large packages.
+RUN set -eux; \
+    for attempt in 1 2 3 4 5; do \
+        if apt-get update; then \
+            break; \
+        fi; \
+        if [ "${attempt}" -eq 5 ]; then \
+            echo "apt-get update failed after ${attempt} attempts." >&2; \
+            exit 1; \
+        fi; \
+        sleep $((attempt * 2)); \
+    done; \
+    apt-get install -y --no-install-recommends \
+        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+        ros-$ROS_DISTRO-rviz2 \
+        ros-$ROS_DISTRO-foxglove-bridge \
+        dotnet-sdk-8.0 \
+        ros-$ROS_DISTRO-pcl-ros ros-$ROS_DISTRO-pcl-conversions ros-$ROS_DISTRO-pcl-msgs; \
+    apt-get autoremove -y; \
+    apt-get clean; \
+    rm -rf /tmp/*
 
 
-# Install openvino runtime
-RUN if [ "${TARGETARCH}" = "amd64" ]; then \
-        mkdir -p /etc/apt/keyrings && \
-        wget -O /etc/apt/keyrings/intel-openvino.asc \
-            https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB && \
-        chmod 644 /etc/apt/keyrings/intel-openvino.asc && \
-        echo "deb [signed-by=/etc/apt/keyrings/intel-openvino.asc] https://apt.repos.intel.com/openvino ubuntu24 main" \
-            > /etc/apt/sources.list.d/intel-openvino.list && \
+# Install openvino runtime when available for the target architecture.
+RUN if [ "${RMCS_INSTALL_OPENVINO}" = "1" ]; then \
+        wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB && \
+        apt-key add ./GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB && \
+        rm ./GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB && \
+        echo "deb https://apt.repos.intel.com/openvino ubuntu24 main" > /etc/apt/sources.list.d/intel-openvino.list && \
         apt-get update && \
         apt-get install -y --no-install-recommends openvino-2025.2.0 && \
-        apt-get clean && \
+        apt-get autoremove -y && apt-get clean && \
         rm -rf /var/lib/apt/lists/* /tmp/*; \
     else \
-        echo "Skipping OpenVINO install on ${TARGETARCH}"; \
+        echo "Skipping OpenVINO install for this development profile."; \
     fi
 
-# Install Livox SDK
-RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git && \
-    cd Livox-SDK2 && \
-    sed -i '6iset(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-pragmas -Wno-c++20-compat -include cstdint")' CMakeLists.txt && \
-    mkdir build && cd build && \
-    cmake -DCMAKE_BUILD_TYPE=Release .. && \
-    make -j && \
-    make install && \
-    cd ../.. && rm -rf Livox-SDK2
+# Install Livox SDK when needed for the development profile.
+RUN if [ "${RMCS_INSTALL_LIVOX_SDK}" = "1" ]; then \
+        set -eux; \
+        livox_dir="/tmp/Livox-SDK2"; \
+        archive="/tmp/Livox-SDK2.tar.gz"; \
+        for attempt in 1 2 3 4 5; do \
+            rm -rf "${livox_dir}" "${archive}"; \
+            if curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+                https://codeload.github.com/Livox-SDK/Livox-SDK2/tar.gz/refs/heads/master \
+                -o "${archive}"; then \
+                break; \
+            fi; \
+            if [ "${attempt}" -eq 5 ]; then \
+                echo "Failed to download Livox SDK after ${attempt} attempts." >&2; \
+                exit 1; \
+            fi; \
+            sleep $((attempt * 2)); \
+        done; \
+        mkdir -p "${livox_dir}"; \
+        tar -xzf "${archive}" -C /tmp; \
+        mv /tmp/Livox-SDK2-master "${livox_dir}"; \
+        sed -i '6iset(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-pragmas -Wno-c++20-compat -include cstdint")' "${livox_dir}/CMakeLists.txt"; \
+        mkdir -p "${livox_dir}/build"; \
+        cd "${livox_dir}/build"; \
+        cmake -DCMAKE_BUILD_TYPE=Release ..; \
+        make -j; \
+        make install; \
+        rm -rf "${livox_dir}" "${archive}"; \
+    else \
+        echo "Skipping Livox SDK install for this development profile."; \
+    fi
 
 # Mount rmcs source and install dependencies
 RUN --mount=type=bind,target=/rmcs_ws/src,source=rmcs_ws/src,readonly \
-    apt-get update && \
-    rosdep install --from-paths /rmcs_ws/src --ignore-src -r -y && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/*
-
-# Build Unison from source because upstream does not ship arm64 release binaries
-# and the distro package does not include unison-fsmonitor.
-# SHA256 verified against Ubuntu Launchpad source package unison-2.53.8-1.
-RUN export UNISON_VERSION=2.53.8 && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends ocaml-nox && \
-    curl -L "https://github.com/bcpierce00/unison/archive/refs/tags/v${UNISON_VERSION}.tar.gz" \
-        -o "/tmp/unison-v${UNISON_VERSION}.tar.gz" && \
-    echo "d0d30ea63e09fc8edf10bd8cbab238fffc8ed510d27741d06b5caa816abd58b6  /tmp/unison-v${UNISON_VERSION}.tar.gz" | sha256sum -c - && \
-    tar -xzf "/tmp/unison-v${UNISON_VERSION}.tar.gz" -C /tmp && \
-    cd "/tmp/unison-${UNISON_VERSION}" && \
-    make -j"$(nproc)" && \
-    make install PREFIX=/usr/local && \
-    cd / && \
-    rm -rf "/tmp/unison-${UNISON_VERSION}" "/tmp/unison-v${UNISON_VERSION}.tar.gz" && \
-    apt-get purge -y --auto-remove ocaml-nox && \
-    apt-get clean && \
+    set -eux; \
+    if ! find /var/lib/apt/lists -name '*Packages*' -print -quit | grep -q .; then \
+        for attempt in 1 2 3 4 5; do \
+            if apt-get update; then \
+                break; \
+            fi; \
+            if [ "${attempt}" -eq 5 ]; then \
+                echo "apt-get update failed after ${attempt} attempts." >&2; \
+                exit 1; \
+            fi; \
+            sleep $((attempt * 2)); \
+        done; \
+    fi; \
+    rosdep install --from-paths /rmcs_ws/src --ignore-src -r -y; \
+    apt-get autoremove -y; \
+    apt-get clean; \
     rm -rf /var/lib/apt/lists/* /tmp/*
 
 # Developing container, works with devcontainer
 FROM rmcs-base AS rmcs-develop
 ARG TARGETARCH
+
+ARG RMCS_DEV_PROFILE=linux
 
 # Install develop tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -257,27 +234,17 @@ RUN --mount=type=bind,target=/tmp/.ssh,source=.ssh,readonly=false \
     chown -R 1000:1000 .unison
 
 # Install latest neovim
-RUN case "${TARGETARCH}" in \
-        amd64) nvim_arch=x86_64 ;; \
-        arm64) nvim_arch=arm64 ;; \
-        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+RUN arch="$(dpkg --print-architecture)" && \
+    case "$arch" in \
+        amd64) nvim_arch="x86_64" ;; \
+        arm64) nvim_arch="arm64" ;; \
+        *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
     esac && \
-    curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-${nvim_arch}.tar.gz && \
+    curl -LO "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-${nvim_arch}.tar.gz" && \
     rm -rf /opt/nvim && \
-    tar -C /opt -xzf nvim-linux-${nvim_arch}.tar.gz && \
-    mv /opt/nvim-linux-${nvim_arch} /opt/nvim && \
-    rm nvim-linux-${nvim_arch}.tar.gz
-ENV PATH="${PATH}:/opt/nvim/bin"
-
-# Install latest stable cmake for user ubuntu
-RUN case "${TARGETARCH}" in \
-        amd64) cmake_arch=x86_64 ;; \
-        arm64) cmake_arch=aarch64 ;; \
-        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac && \
-    wget https://github.com/kitware/cmake/releases/download/v4.2.3/cmake-4.2.3-linux-${cmake_arch}.sh -O install.sh && \
-    mkdir -p /opt/cmake/ && bash install.sh --skip-license --prefix=/opt/cmake/ --exclude-subdir && \
-    rm install.sh
+    tar -C /opt -xzf "nvim-linux-${nvim_arch}.tar.gz" && \
+    mv "/opt/nvim-linux-${nvim_arch}" /opt/nvim && \
+    rm "nvim-linux-${nvim_arch}.tar.gz"
 
 # Change user
 RUN chsh -s /bin/zsh ubuntu && \
@@ -294,14 +261,17 @@ RUN mkdir -p \
 WORKDIR /home/ubuntu
 ENV USER=ubuntu
 ENV WORKDIR=/home/ubuntu
+ENV RMCS_DEV_PROFILE=${RMCS_DEV_PROFILE}
 USER ubuntu
 
 # Install oh my zsh, change theme to af-magic and setup environment of zsh
-RUN sh -c "$(wget https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -O -)" && \
+RUN git config --global http.proxy http://host.docker.internal:7890 && \
+    git config --global https.proxy http://host.docker.internal:7890 && \
+    sh -c "$(wget https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -O -)" && \
     sed -i 's/ZSH_THEME=\"[a-z0-9\-]*\"/ZSH_THEME="af-magic"/g' ~/.zshrc && \
-    echo '# Hint: uncomment and set RMCS_PATH if RMCS is not located at /workspaces/RMCS.' >> ~/.zshrc && \
-    echo '# export RMCS_PATH="/workspaces/RMCS"' >> ~/.zshrc && \
-    echo 'source ~/env_setup.zsh' >> ~/.zshrc
+    echo 'source ~/env_setup.zsh' >> ~/.zshrc && \
+    echo 'export PATH="${PATH}:/opt/nvim/bin"' >> ~/.zshrc && \
+    echo 'export PATH="${PATH}:${RMCS_PATH}/.script"' >> ~/.zshrc
 
 # Copy environment setup scripts
 COPY --chown=1000:1000 .script/template/env_setup.bash env_setup.bash
@@ -385,7 +355,10 @@ RUN sh -c "$(wget https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools
     echo 'export PATH=${PATH}:/rmcs_install/lib/rmcs_cli' >> ~/.zshrc && \
     chsh -s /bin/zsh root
 
-RUN mkdir -p /rmcs_install/
+RUN mkdir -p /workspaces/RMCS/rmcs_ws/log \
+    /workspaces/RMCS/rmcs_ws/build \
+    /workspaces/RMCS/rmcs_ws/install \
+    && chown -R ubuntu:ubuntu /workspaces/RMCS/rmcs_ws
 
 COPY --chown=root:root .script/set-robot /usr/local/bin/set-robot
 COPY --chown=root:root .script/template/set-hostname /usr/local/bin/set-hostname

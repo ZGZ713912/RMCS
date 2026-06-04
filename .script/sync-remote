@@ -19,6 +19,21 @@ COLORED_SYNC_FLAG = (
 )
 
 
+def warn_mac_dev(command_name):
+    if os.environ.get("RMCS_DEV_PROFILE") != "mac":
+        return
+
+    print(f"Warning: {command_name} is running inside the RMCS Mac development container.")
+    print("This container is intended for editing, indexing, and builds on Apple Silicon Macs.")
+    print(
+        "Linux-specific runtime features such as USB device passthrough, host networking, "
+        "and GUI forwarding are not guaranteed here."
+    )
+    print(
+        "Use a Linux host or the existing remote deployment workflow for hardware-backed runtime tasks."
+    )
+
+
 def create_process():
     command = [
         "unison",
@@ -66,6 +81,8 @@ def finish_connection(conn: socket):
 
 
 def main():
+    warn_mac_dev("sync-remote")
+
     selector = selectors.DefaultSelector()
 
     process, pipe_stdout = create_process()
