@@ -18,6 +18,7 @@ public:
 
         register_input("/referee/shooter/cooling", shooter_cooling_);
         register_input("/referee/shooter/heat_limit", shooter_heat_limit_);
+        register_input("/referee/shooter/heat", referee_heat_);
 
         register_input("/gimbal/bullet_fired", bullet_fired_);
 
@@ -31,6 +32,11 @@ public:
         if (*bullet_fired_)
             shooter_heat_ += heat_per_shot + 10;
 
+        if (*referee_heat_ >= 0 && *referee_heat_ <= *shooter_heat_limit_) {
+            if (*referee_heat_ > shooter_heat_)
+                shooter_heat_ = *referee_heat_;
+        }
+
         *control_bullet_allowance_ = std::max<int64_t>(
             0, (*shooter_heat_limit_ - shooter_heat_ - reserved_heat) / heat_per_shot);
     }
@@ -38,6 +44,7 @@ public:
 private:
     InputInterface<int64_t> shooter_cooling_;
     InputInterface<int64_t> shooter_heat_limit_;
+    InputInterface<int64_t> referee_heat_;
 
     InputInterface<bool> bullet_fired_;
 
