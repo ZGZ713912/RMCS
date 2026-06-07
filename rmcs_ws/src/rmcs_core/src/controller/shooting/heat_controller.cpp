@@ -36,7 +36,7 @@ public:
             double dt_seconds =
                 std::chrono::duration<double>(now - last_update_time_).count();
             double cooling_delta_exact =
-                *shooter_cooling_ * dt_seconds * 1000.0 + cooling_fraction_remainder_;
+                *shooter_cooling_ * dt_seconds * static_cast<double>(kHeatScale) + cooling_fraction_remainder_;
             int64_t cooling_delta = static_cast<int64_t>(cooling_delta_exact);
             cooling_fraction_remainder_ = cooling_delta_exact - cooling_delta;
             shooter_heat_ = std::max<int64_t>(0, shooter_heat_ - cooling_delta);
@@ -57,8 +57,9 @@ public:
         if (over_limit && !last_over_limit_) {
             RCLCPP_WARN(
                 get_logger(),
-                "Shooter heat exceeded limit: heat=%ld, limit=%ld, referee_heat=%ld, cooling=%ld",
-                effective_heat, *shooter_heat_limit_, *referee_heat_, *shooter_cooling_);
+                "Shooter heat exceeded limit: heat=%lld, limit=%lld, referee_heat=%lld, cooling=%lld",
+                static_cast<long long>(effective_heat), static_cast<long long>(*shooter_heat_limit_),
+                static_cast<long long>(*referee_heat_), static_cast<long long>(*shooter_cooling_));
         }
         last_over_limit_ = over_limit;
 
