@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <chrono>
 
 #include <rclcpp/node.hpp>
 #include <rmcs_executor/component.hpp>
@@ -10,8 +9,6 @@ class HeatController
     : public rmcs_executor::Component
     , public rclcpp::Node {
 public:
-    static constexpr int64_t kHeatScale = 1000;
-
     HeatController()
         : Node(
               get_component_name(),
@@ -30,25 +27,33 @@ public:
     }
 
     void update() override {
-        auto now = std::chrono::steady_clock::now();
-
-        if (!first_update_) {
-            double dt_seconds =
-                std::chrono::duration<double>(now - last_update_time_).count();
-            double cooling_delta_exact =
-                *shooter_cooling_ * dt_seconds * static_cast<double>(kHeatScale) + cooling_fraction_remainder_;
-            int64_t cooling_delta = static_cast<int64_t>(cooling_delta_exact);
-            cooling_fraction_remainder_ = cooling_delta_exact - cooling_delta;
-            shooter_heat_ = std::max<int64_t>(0, shooter_heat_ - cooling_delta);
-        }
-        first_update_ = false;
-        last_update_time_ = now;
-
         if (*bullet_fired_)
             shooter_heat_ += heat_per_shot;
 
+        ++cooling_tick_counter_;
+        const auto cooling_delta_per_settlement = *shooter_cooling_ * kHeatScale / kCoolingRateHz;
+        if (cooling_tick_counter_ >= kCoolingPeriodTicks) {
+            cooling_tick_counter_ = 0;
+            shooter_heat_ = std::max<int64_t>(0, shooter_heat_ - cooling_delta_per_settlement);
+        }
+
         auto effective_heat = shooter_heat_;
         const auto referee_heat_scaled = *referee_heat_ * kHeatScale;
+        const auto referee_heat_tolerance = cooling_delta_per_settlement * 2;
+        const auto referee_heat_ahead =
+            *referee_heat_ >= 0 && referee_heat_scaled > shooter_heat_ + referee_heat_tolerance;
+        if (referee_heat_ahead && !last_referee_heat_ahead_) {
+            RCLCPP_WARN(
+                get_logger(),
+                "Referee heat significantly ahead of local heat: local=%lld, referee=%lld, referee_scaled=%lld, tolerance=%lld, limit=%lld, cooling=%lld",
+                static_cast<long long>(shooter_heat_), static_cast<long long>(*referee_heat_),
+                static_cast<long long>(referee_heat_scaled),
+                static_cast<long long>(referee_heat_tolerance),
+                static_cast<long long>(*shooter_heat_limit_),
+                static_cast<long long>(*shooter_cooling_));
+        }
+        last_referee_heat_ahead_ = referee_heat_ahead;
+
         if (*referee_heat_ >= 0 && referee_heat_scaled <= *shooter_heat_limit_) {
             effective_heat = std::max(effective_heat, referee_heat_scaled);
         }
@@ -68,6 +73,11 @@ public:
     }
 
 private:
+    static constexpr int64_t kHeatScale = 1000;
+    static constexpr int64_t kCoolingRateHz = 10;
+    static constexpr int64_t kUpdateRateHz = 1000;
+    static constexpr int64_t kCoolingPeriodTicks = kUpdateRateHz / kCoolingRateHz;
+
     InputInterface<int64_t> shooter_cooling_;
     InputInterface<int64_t> shooter_heat_limit_;
     InputInterface<int64_t> referee_heat_;
@@ -79,10 +89,8 @@ private:
 
     int64_t shooter_heat_ = 0;
     bool last_over_limit_ = false;
-
-    std::chrono::steady_clock::time_point last_update_time_;
-    bool first_update_ = true;
-    double cooling_fraction_remainder_ = 0.0;
+    bool last_referee_heat_ahead_ = false;
+    int64_t cooling_tick_counter_ = 0;
 
     OutputInterface<int64_t> control_bullet_allowance_;
 };
