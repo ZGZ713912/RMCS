@@ -63,6 +63,8 @@ public:
             register_input(
                 fmt::format("/chassis/{}_joint/physical_angle", kJointName[i]),
                 joint_physical_angle_[i], false);
+            register_input(
+                fmt::format("/chassis/{}_joint/torque", kJointName[i]), joint_torque_[i], false);
             register_output(
                 fmt::format("/chassis/{}_joint/target_physical_angle", kJointName[i]),
                 joint_target_angle_[i], nan_);
@@ -265,6 +267,17 @@ private:
         return angles;
     }
 
+    std::array<double, kJointCount> read_joint_torques_() const {
+        std::array<double, kJointCount> torques;
+        torques.fill(nan_);
+
+        for (size_t i = 0; i < kJointCount; ++i)
+            if (joint_torque_[i].ready() && std::isfinite(*joint_torque_[i]))
+                torques[i] = *joint_torque_[i];
+
+        return torques;
+    }
+
     std::array<double, kJointCount> compute_target_angles_rad_() const {
         const auto& joint_posture_state = joint_mode_mgr_.joint_posture_state();
         std::array<double, kJointCount> targets_deg = joint_posture_state.joint_posture_target_deg;
@@ -278,6 +291,7 @@ private:
 
     void run_joint_intent_pipeline_() {
         const auto current_physical_angles = read_feedback_();
+        const auto current_joint_torques = read_joint_torques_();
         const auto& joint_posture_state = joint_mode_mgr_.joint_posture_state();
 
         if (!joint_mgr_.init_from_feedback(current_physical_angles)) {
@@ -287,9 +301,11 @@ private:
 
         std::array<double, kJointCount> target_angles_rad = compute_target_angles_rad_();
 
-        suspension_.calibrate(
-            *chassis_imu_pitch_, *chassis_imu_roll_, joint_posture_state.symmetric_posture_target,
-            update_dt());
+        if (joint_posture_state.suspension_active) {
+            suspension_.calibrate(
+                *chassis_imu_pitch_, *chassis_imu_roll_,
+                joint_posture_state.symmetric_posture_target, update_dt());
+        }
 
         *scope_motor_control_torque = suspension_.scope_torque(
             joint_posture_state.suspension_active,
@@ -299,12 +315,16 @@ private:
             *chassis_imu_pitch_ - suspension_.pitch_offset(),
             *chassis_imu_roll_ - suspension_.roll_offset(), *chassis_imu_pitch_rate_,
             *chassis_imu_roll_rate_, joint_posture_state.suspension_active,
-            joint_posture_state.ctrl_low_prone_active, joint_mode_mgr_.min_angle(),
+            joint_posture_state.passive_suspension_active,
+            joint_posture_state.low_prone_active, joint_mode_mgr_.min_angle(),
             joint_mode_mgr_.max_angle(), joint_posture_state.suspension_reference_angle_deg,
-            joint_mode_mgr_.correction_inverted(), joint_mgr_.angle_states(), update_dt());
+            joint_mode_mgr_.correction_inverted(), joint_mgr_.angle_states(), current_joint_torques,
+            update_dt());
 
         joint_mgr_.run_trajectory(
-            target_angles_rad, joint_posture_state.suspension_active, update_dt());
+            target_angles_rad,
+            joint_posture_state.suspension_active || joint_posture_state.passive_suspension_active,
+            update_dt());
 
         publish_joint_targets_(current_physical_angles, corrections);
     }
@@ -384,6 +404,7 @@ private:
     OutputInterface<double> scope_motor_control_torque;
 
     std::array<InputInterface<double>, kJointCount> joint_physical_angle_;
+    std::array<InputInterface<double>, kJointCount> joint_torque_;
     std::array<OutputInterface<double>, kJointCount> joint_target_angle_;
     std::array<OutputInterface<double>, kJointCount> joint_target_velocity_;
     std::array<OutputInterface<double>, kJointCount> joint_target_acceleration_;

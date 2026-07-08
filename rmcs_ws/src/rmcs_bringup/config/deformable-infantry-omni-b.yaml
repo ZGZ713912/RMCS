@@ -101,6 +101,25 @@ chassis_controller:
     active_suspension_correction_velocity_limit_deg: 720.0
     active_suspension_correction_acceleration_limit_deg: 3600.0
 
+    # Passive suspension: use joint torque as a wheel-load proxy and equalize four-corner support.
+    passive_suspension_enable: true
+    passive_suspension_kp: 0.035
+    passive_suspension_ki: 0.005
+    passive_suspension_deadband: 0.08
+    passive_suspension_integral_limit: 3.0
+    passive_suspension_load_lpf_alpha: 0.08
+    passive_suspension_max_angle_correction_deg: 8.0
+    passive_suspension_correction_velocity_limit_deg: 180.0
+    passive_suspension_correction_acceleration_limit_deg: 720.0
+    passive_suspension_load_sign_left_front: -1.0
+    passive_suspension_load_sign_left_back: -1.0
+    passive_suspension_load_sign_right_back: -1.0
+    passive_suspension_load_sign_right_front: -1.0
+    passive_suspension_load_bias_left_front: 0.0
+    passive_suspension_load_bias_left_back: 0.0
+    passive_suspension_load_bias_right_back: 0.0
+    passive_suspension_load_bias_right_front: 0.0
+
     # Automatic IMU mounting-error calibration.
     # When all four requested joint targets stay equal for 2s, average pitch/roll from 2s to 5s.
     chassis_imu_calibration_wait_s: 2.0
