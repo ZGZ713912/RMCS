@@ -105,7 +105,7 @@ public:
             return;
         }
 
-        const auto target_angles_rad = read_posture_target_angles_rad_();
+        const auto posture_target_angles_rad = read_posture_target_angles_rad_();
         const auto dt = update_dt_();
 
         if (*active_suspension_active_)
@@ -120,8 +120,11 @@ public:
             *suspension_reference_angle_deg_, *correction_inverted_, joint_angle_states,
             current_joint_torques, dt);
 
-        run_joint_trajectory_(
-            target_angles_rad, *active_suspension_active_ || *passive_suspension_active_, dt);
+        const auto target_angles_rad = compute_joint_trajectory_targets_(
+            posture_target_angles_rad, *active_suspension_active_, *low_prone_active_,
+            *min_angle_deg_, *suspension_reference_angle_deg_);
+
+        run_joint_trajectory_(target_angles_rad, *active_suspension_active_, dt);
         publish_joint_targets_(current_physical_angles);
     }
 
@@ -280,6 +283,19 @@ private:
         for (size_t i = 0; i < kJointCount; ++i)
             targets[i] = *joint_posture_target_angle_rad_[i];
         return targets;
+    }
+
+    std::array<double, kJointCount> compute_joint_trajectory_targets_(
+        const std::array<double, kJointCount>& posture_target_angles_rad, bool suspension_active,
+        bool low_prone_active, double min_angle_deg, double suspension_reference_angle_deg) const {
+        if (!suspension_active)
+            return posture_target_angles_rad;
+
+        std::array<double, kJointCount> target_angles_rad{};
+        double target_angle_rad = low_prone_active ? deg_to_rad_(min_angle_deg - 5.0)
+                                                   : deg_to_rad_(suspension_reference_angle_deg);
+        target_angles_rad.fill(target_angle_rad);
+        return target_angles_rad;
     }
 
     void reset_attitude_() {

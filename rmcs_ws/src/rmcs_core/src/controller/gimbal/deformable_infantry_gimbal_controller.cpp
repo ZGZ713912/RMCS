@@ -250,31 +250,22 @@ private:
     }
 
     auto pitch_gravity_feedforward() const -> double {
+        if (ctrl_hold_active_)
+            return 0.0;
         if (!input_.pitch_angle.ready() || !std::isfinite(*input_.pitch_angle))
             return 0.0;
-        else
         return pitch_gravity_ff_gain_ * std::sin(*input_.pitch_angle - pitch_gravity_ff_phase_);
     }
 
     auto update_pitch_lock_state(
         rmcs_msgs::Switch switch_left, rmcs_msgs::Switch switch_right,
         const rmcs_msgs::Keyboard& keyboard) -> void {
-        if (last_switch_left_ != rmcs_msgs::Switch::DOWN && switch_left == rmcs_msgs::Switch::DOWN)
-            remote_low_prone_toggle_left_down_pending_ = true;
-
-        const bool right_entered_up =
-            last_switch_right_ != rmcs_msgs::Switch::UP && switch_right == rmcs_msgs::Switch::UP;
-        if (remote_low_prone_toggle_left_down_pending_ && switch_left == rmcs_msgs::Switch::DOWN
-            && right_entered_up) {
-            remote_low_prone_toggle_left_down_pending_ = false;
-            remote_low_prone_enabled_by_toggle_ = !remote_low_prone_enabled_by_toggle_;
+        if (switch_left == rmcs_msgs::Switch::DOWN && switch_right == rmcs_msgs::Switch::UP
+            && last_switch_right_ == rmcs_msgs::Switch::MIDDLE) {
+            suspension_on_by_switch_ = !suspension_on_by_switch_;
         }
 
-        if (switch_left != rmcs_msgs::Switch::DOWN)
-            remote_low_prone_toggle_left_down_pending_ = false;
-
-        pitch_lock_active_ = keyboard.ctrl || remote_low_prone_enabled_by_toggle_;
-        last_switch_left_ = switch_left;
+        pitch_lock_active_ = keyboard.ctrl || suspension_on_by_switch_;
         last_switch_right_ = switch_right;
     }
 
@@ -340,9 +331,7 @@ private:
     auto reset_all_controls() -> void {
         deactivate_ctrl_hold();
         pitch_lock_active_ = false;
-        remote_low_prone_enabled_by_toggle_ = false;
-        remote_low_prone_toggle_left_down_pending_ = false;
-        last_switch_left_ = rmcs_msgs::Switch::UNKNOWN;
+        suspension_on_by_switch_ = false;
         last_switch_right_ = rmcs_msgs::Switch::UNKNOWN;
         gimbal_solver_.update(TwoAxisGimbalSolver::SetDisabled{});
         *output_.yaw_angle_error   = kNaN;
@@ -384,10 +373,8 @@ private:
     double pitch_gravity_ff_gain_ = 0.0;
     double pitch_gravity_ff_phase_ = 0.0;
     bool pitch_lock_active_ = false;
-    bool remote_low_prone_enabled_by_toggle_ = false;
-    bool remote_low_prone_toggle_left_down_pending_ = false;
+    bool suspension_on_by_switch_ = false;
     rmcs_msgs::Switch last_switch_right_ = rmcs_msgs::Switch::UNKNOWN;
-    rmcs_msgs::Switch last_switch_left_ = rmcs_msgs::Switch::UNKNOWN;
     bool ctrl_hold_active_ = false;
 };
 
