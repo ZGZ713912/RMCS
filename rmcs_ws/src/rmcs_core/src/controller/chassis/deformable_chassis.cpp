@@ -318,8 +318,8 @@ private:
             joint_posture_state.passive_suspension_active,
             joint_posture_state.low_prone_active, joint_mode_mgr_.min_angle(),
             joint_mode_mgr_.max_angle(), joint_posture_state.suspension_reference_angle_deg,
-            joint_mode_mgr_.correction_inverted(), joint_mgr_.angle_states(), current_joint_torques,
-            update_dt());
+            joint_mode_mgr_.correction_inverted(), joint_mgr_.angle_states(),
+            current_physical_angles, current_joint_torques, update_dt());
 
         joint_mgr_.run_trajectory(
             target_angles_rad,
