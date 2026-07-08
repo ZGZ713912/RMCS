@@ -21,6 +21,7 @@ rmcs_executor:
       - rmcs_core::controller::pid::PidController -> bullet_feeder_velocity_pid_controller
 
       - rmcs_core::controller::chassis::DeformableChassis -> chassis_controller
+      - rmcs_core::controller::chassis::DeformableSuspension -> deformable_suspension
       - rmcs_core::controller::chassis::ChassisPowerController -> chassis_power_controller
       - rmcs_core::controller::chassis::DeformableOmniWheelController -> deformable_chassis_controller
 
@@ -58,7 +59,28 @@ chassis_controller:
     min_angle: 12.0
     max_angle: 50.0
     active_suspension_enable: true
+    passive_suspension_enable: true
     spin_ratio: 1.0
+
+deformable_suspension:
+  ros__parameters:
+    passive_suspension_enable: true
+    passive_suspension_kp: 0.035
+    passive_suspension_ki: 0.005
+    passive_suspension_deadband: 0.08
+    passive_suspension_load_lpf_alpha: 0.08
+    passive_suspension_integral_limit: 3.0
+    passive_suspension_max_angle_correction_deg: 8.0
+    passive_suspension_correction_velocity_limit_deg: 180.0
+    passive_suspension_correction_acceleration_limit_deg: 720.0
+    passive_suspension_load_sign_left_front: -1.0
+    passive_suspension_load_sign_left_back: -1.0
+    passive_suspension_load_sign_right_back: -1.0
+    passive_suspension_load_sign_right_front: -1.0
+    passive_suspension_load_bias_left_front: 0.0
+    passive_suspension_load_bias_left_back: 0.0
+    passive_suspension_load_bias_right_back: 0.0
+    passive_suspension_load_bias_right_front: 0.0
 
     # IMU attitude correction at min-angle stance.
     active_suspension_pitch_outer_kp: 12.0
@@ -98,47 +120,6 @@ chassis_controller:
     active_suspension_target_acceleration_limit_deg: 360.0
     active_suspension_correction_velocity_limit_deg: 720.0
     active_suspension_correction_acceleration_limit_deg: 3600.0
-
-    # Passive suspension v2: observe support margin and plan in common/pitch/roll/twist modes.
-    passive_suspension_enable: true
-    passive_suspension_support_margin_deadband: 0.08
-    passive_suspension_support_unload_threshold: 0.18
-    passive_suspension_unload_persistence_s: 0.06
-    passive_suspension_impact_threshold: 8.0
-    passive_suspension_support_lpf_alpha: 0.08
-    passive_suspension_payload_lpf_alpha: 0.02
-    passive_suspension_support_pitch_comp_gain: 0.6
-    passive_suspension_support_roll_comp_gain: 0.6
-    passive_suspension_support_angle_comp_gain: 0.25
-    passive_suspension_support_lever_arm_min: 0.25
-    passive_suspension_common_gain: 0.10
-    passive_suspension_pitch_gain: 0.16
-    passive_suspension_roll_gain: 0.16
-    passive_suspension_twist_gain: 0.22
-    passive_suspension_common_integral_gain: 0.005
-    passive_suspension_pitch_integral_gain: 0.008
-    passive_suspension_roll_integral_gain: 0.008
-    passive_suspension_twist_integral_gain: 0.010
-    passive_suspension_mode_integral_limit: 2.0
-    passive_suspension_payload_common_gain: 0.08
-    passive_suspension_clearance_margin_deg: 10.0
-    passive_suspension_clearance_recovery_gain: 0.9
-    passive_suspension_clearance_recovery_integral_gain: 0.05
-    passive_suspension_trusted_body_rate_threshold_deg: 18.0
-    passive_suspension_fast_recovery_gain: 0.35
-    passive_suspension_max_angle_correction_deg: 8.0
-    passive_suspension_correction_velocity_limit_deg: 180.0
-    passive_suspension_correction_acceleration_limit_deg: 720.0
-    passive_suspension_fast_recovery_velocity_limit_deg: 360.0
-    passive_suspension_fast_recovery_acceleration_limit_deg: 1440.0
-    passive_suspension_load_sign_left_front: -1.0
-    passive_suspension_load_sign_left_back: -1.0
-    passive_suspension_load_sign_right_back: -1.0
-    passive_suspension_load_sign_right_front: -1.0
-    passive_suspension_load_bias_left_front: 0.0
-    passive_suspension_load_bias_left_back: 0.0
-    passive_suspension_load_bias_right_back: 0.0
-    passive_suspension_load_bias_right_front: 0.0
 
     # Automatic IMU mounting-error calibration.
     # When all four requested joint targets stay equal for 2s, average pitch/roll from 2s to 5s.

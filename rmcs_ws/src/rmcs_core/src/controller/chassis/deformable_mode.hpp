@@ -93,12 +93,28 @@ public:
         joint_posture_state_.pitch_lock_active = joint_posture_state_.low_prone_active;
 
         update_suspension_mode_from_inputs_(switch_left, switch_right, keyboard, rotary_knob);
-        update_lift_target_toggle_(switch_left, switch_right, keyboard, rotary_knob, dt);
+        update_posture_target_from_inputs_(switch_left, switch_right, keyboard, rotary_knob, dt);
         update_joint_posture_state_(joint_posture_state_.low_prone_active);
 
         last_switch_right_ = switch_right;
         last_switch_left_ = switch_left;
         last_keyboard_ = keyboard;
+    }
+
+    rmcs_msgs::ChassisMode mode() const { return joint_posture_state_.mode; }
+    bool pitch_lock_active() const { return joint_posture_state_.pitch_lock_active; }
+    bool suspension_active() const { return joint_posture_state_.suspension_active; }
+    bool passive_suspension_active() const {
+        return joint_posture_state_.passive_suspension_active;
+    }
+    bool low_prone_active() const { return joint_posture_state_.low_prone_active; }
+    bool symmetric_posture_target() const { return joint_posture_state_.symmetric_posture_target; }
+    bool spinning_forward() const { return joint_posture_state_.spinning_forward; }
+    double suspension_reference_angle_deg() const {
+        return joint_posture_state_.suspension_reference_angle_deg;
+    }
+    void copy_joint_posture_target_deg(std::array<double, 4>& out) const {
+        out = joint_posture_state_.joint_posture_target_deg;
     }
 
     const JointPostureState& joint_posture_state() const { return joint_posture_state_; }
@@ -115,56 +131,61 @@ public:
     }
 
 private:
+    static constexpr size_t kLeftFront = 0;
+    static constexpr size_t kLeftBack = 1;
+    static constexpr size_t kRightBack = 2;
+    static constexpr size_t kRightFront = 3;
+    static constexpr size_t kJointCount = 4;
+
     static double deg_to_rad_(double deg) { return deg * std::numbers::pi / 180.0; }
+
+    static bool
+        symmetric_joint_target_requested_(const std::array<double, kJointCount>& joint_target_deg) {
+        constexpr double epsilon = 1e-6;
+        return std::all_of(joint_target_deg.begin() + 1, joint_target_deg.end(), [&](double v) {
+            return std::abs(v - joint_target_deg.front()) <= epsilon;
+        });
+    }
 
     void update_mode_from_inputs_(
         rmcs_msgs::Switch switch_left, rmcs_msgs::Switch switch_right,
         const rmcs_msgs::Keyboard& keyboard) {
 
-        auto mode = joint_posture_state_.mode;
+        auto next_mode = joint_posture_state_.mode;
         if (switch_left == rmcs_msgs::Switch::DOWN) {
             deactivate_complex_spin_();
-            joint_posture_state_.mode = mode;
+            joint_posture_state_.mode = next_mode;
             return;
         }
 
         if (last_switch_right_ == rmcs_msgs::Switch::MIDDLE
             && switch_right == rmcs_msgs::Switch::DOWN) {
             deactivate_complex_spin_();
-            if (mode == rmcs_msgs::ChassisMode::SPIN) {
-                mode = rmcs_msgs::ChassisMode::STEP_DOWN;
+            if (next_mode == rmcs_msgs::ChassisMode::SPIN) {
+                next_mode = rmcs_msgs::ChassisMode::STEP_DOWN;
             } else {
-                mode = rmcs_msgs::ChassisMode::SPIN;
+                next_mode = rmcs_msgs::ChassisMode::SPIN;
                 joint_posture_state_.spinning_forward = !joint_posture_state_.spinning_forward;
             }
         } else if (!last_keyboard_.c && keyboard.c) {
             deactivate_complex_spin_();
-            if (mode == rmcs_msgs::ChassisMode::SPIN) {
-                mode = rmcs_msgs::ChassisMode::AUTO;
+            if (next_mode == rmcs_msgs::ChassisMode::SPIN) {
+                next_mode = rmcs_msgs::ChassisMode::AUTO;
             } else {
-                mode = rmcs_msgs::ChassisMode::SPIN;
+                next_mode = rmcs_msgs::ChassisMode::SPIN;
                 joint_posture_state_.spinning_forward = !joint_posture_state_.spinning_forward;
             }
         } else if (!last_keyboard_.z && keyboard.z) {
             deactivate_complex_spin_();
-            mode = mode == rmcs_msgs::ChassisMode::STEP_DOWN ? rmcs_msgs::ChassisMode::AUTO
-                                                             : rmcs_msgs::ChassisMode::STEP_DOWN;
+            next_mode = next_mode == rmcs_msgs::ChassisMode::STEP_DOWN
+                          ? rmcs_msgs::ChassisMode::AUTO
+                          : rmcs_msgs::ChassisMode::STEP_DOWN;
         }
 
         if (complex_spin_active_)
-            mode = rmcs_msgs::ChassisMode::SPIN;
+            next_mode = rmcs_msgs::ChassisMode::SPIN;
 
-        joint_posture_state_.mode = mode;
-    }
-
-    void activate_complex_spin_(rmcs_msgs::ChassisMode& mode) {
-        complex_spin_active_ = true;
-        complex_spin_elapsed_ = 0.0;
-        apply_symmetric_target_ = true;
-        if (mode != rmcs_msgs::ChassisMode::SPIN) {
-            mode = rmcs_msgs::ChassisMode::SPIN;
-            joint_posture_state_.spinning_forward = !joint_posture_state_.spinning_forward;
-        }
+        joint_posture_state_.mode = next_mode;
     }
 
     void deactivate_complex_spin_() {
@@ -188,7 +209,7 @@ private:
         apply_symmetric_target_ = false;
     }
 
-    void toggle_bg_target_() {
+    void toggle_front_back_posture_target_() {
         if (joint_current_target_angle_[kLeftFront] > joint_current_target_angle_[kLeftBack])
             apply_front_low_rear_high_target_();
         else
@@ -218,7 +239,8 @@ private:
             suspension_enabled_by_toggle_ = !suspension_enabled_by_toggle_;
 
         const bool active_requested =
-            suspension_enable_ && (joint_posture_state_.low_prone_active || suspension_enabled_by_toggle_);
+            suspension_enable_
+            && (joint_posture_state_.low_prone_active || suspension_enabled_by_toggle_);
         if (active_requested)
             passive_suspension_enabled_by_toggle_ = false;
 
@@ -259,7 +281,7 @@ private:
         return false;
     }
 
-    void update_lift_target_toggle_(
+    void update_posture_target_from_inputs_(
         rmcs_msgs::Switch switch_left, rmcs_msgs::Switch switch_right,
         const rmcs_msgs::Keyboard& keyboard, double rotary_knob, double dt) {
 
@@ -268,13 +290,10 @@ private:
             switch_left == rmcs_msgs::Switch::MIDDLE && switch_right == rmcs_msgs::Switch::MIDDLE;
 
         const bool keyboard_toggle_condition = !last_keyboard_.q && keyboard.q;
-
         const bool rotary_knob_toggle_condition =
             remote_joint_posture_rotary_mode && rotary_knob_down_edge_(rotary_knob);
-
         const bool rotary_knob_bg_toggle_condition =
             remote_joint_posture_rotary_mode && rotary_knob_up_edge_(rotary_knob);
-
         const bool front_high_rear_low = !last_keyboard_.b && keyboard.b;
         const bool front_low_rear_high = !last_keyboard_.g && keyboard.g;
 
@@ -299,7 +318,7 @@ private:
             apply_symmetric_target_ = true;
             joint_current_target_angle_.fill(current_target_angle_);
         } else if (rotary_knob_bg_toggle_condition) {
-            toggle_bg_target_();
+            toggle_front_back_posture_target_();
         } else if (front_high_rear_low) {
             apply_front_high_rear_low_target_();
         } else if (front_low_rear_high) {
@@ -320,12 +339,6 @@ private:
         return last_rotary_knob_ > -rotary_knob_edge_threshold
             && rotary_knob <= -rotary_knob_edge_threshold;
     }
-
-    static constexpr size_t kLeftFront = 0;
-    static constexpr size_t kLeftBack = 1;
-    static constexpr size_t kRightBack = 2;
-    static constexpr size_t kRightFront = 3;
-    static constexpr size_t kJointCount = 4;
 
     void update_joint_posture_state_(bool low_prone_active) {
         std::array<double, kJointCount> effective_joint_posture_target_deg =
@@ -348,14 +361,6 @@ private:
             posture_angle_sum += angle_deg;
         joint_posture_state_.suspension_reference_angle_deg =
             posture_angle_sum / static_cast<double>(kJointCount);
-    }
-
-    static bool
-        symmetric_joint_target_requested_(const std::array<double, kJointCount>& joint_target_deg) {
-        constexpr double epsilon = 1e-6;
-        return std::all_of(joint_target_deg.begin() + 1, joint_target_deg.end(), [&](double v) {
-            return std::abs(v - joint_target_deg.front()) <= epsilon;
-        });
     }
 
     JointPostureState joint_posture_state_;

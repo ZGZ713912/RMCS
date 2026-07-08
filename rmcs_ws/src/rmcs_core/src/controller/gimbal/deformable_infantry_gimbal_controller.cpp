@@ -43,6 +43,7 @@ public:
     auto update() -> void override {
         const auto switch_right = *input_.switch_right;
         const auto switch_left  = *input_.switch_left;
+        const auto keyboard     = *input_.keyboard;
 
         using namespace rmcs_msgs;
         if ((switch_left == Switch::UNKNOWN || switch_right == Switch::UNKNOWN)
@@ -50,6 +51,8 @@ public:
             reset_all_controls();
             return;
         }
+
+        update_pitch_lock_state(switch_left, switch_right, keyboard);
 
         if (ctrl_hold_requested()) {
             update_ctrl_hold_control();
@@ -147,7 +150,6 @@ private:
             component.register_input("/remote/mouse/velocity", mouse_velocity);
             component.register_input("/remote/mouse", mouse);
             component.register_input("/predefined/update_rate", update_rate, false);
-            component.register_input("/chassis/pitch_lock_active", pitch_lock_active, false);
 
             component.register_input("/gimbal/yaw/angle", yaw_angle);
             component.register_input("/gimbal/yaw/velocity", yaw_velocity);
@@ -173,7 +175,6 @@ private:
         InputInterface<Eigen::Vector2d> mouse_velocity;
         InputInterface<rmcs_msgs::Mouse> mouse;
         InputInterface<double> update_rate;
-        InputInterface<bool> pitch_lock_active;
 
         InputInterface<double> yaw_angle;
         InputInterface<double> yaw_velocity;
@@ -212,7 +213,7 @@ private:
     } output_{*this};
 
     auto ctrl_hold_requested() const -> bool {
-        return input_.pitch_lock_active.ready() && *input_.pitch_lock_active;
+        return pitch_lock_active_;
     }
 
     auto update_dt() const -> double {
@@ -253,6 +254,28 @@ private:
             return 0.0;
         else
         return pitch_gravity_ff_gain_ * std::sin(*input_.pitch_angle - pitch_gravity_ff_phase_);
+    }
+
+    auto update_pitch_lock_state(
+        rmcs_msgs::Switch switch_left, rmcs_msgs::Switch switch_right,
+        const rmcs_msgs::Keyboard& keyboard) -> void {
+        if (last_switch_left_ != rmcs_msgs::Switch::DOWN && switch_left == rmcs_msgs::Switch::DOWN)
+            remote_low_prone_toggle_left_down_pending_ = true;
+
+        const bool right_entered_up =
+            last_switch_right_ != rmcs_msgs::Switch::UP && switch_right == rmcs_msgs::Switch::UP;
+        if (remote_low_prone_toggle_left_down_pending_ && switch_left == rmcs_msgs::Switch::DOWN
+            && right_entered_up) {
+            remote_low_prone_toggle_left_down_pending_ = false;
+            remote_low_prone_enabled_by_toggle_ = !remote_low_prone_enabled_by_toggle_;
+        }
+
+        if (switch_left != rmcs_msgs::Switch::DOWN)
+            remote_low_prone_toggle_left_down_pending_ = false;
+
+        pitch_lock_active_ = keyboard.ctrl || remote_low_prone_enabled_by_toggle_;
+        last_switch_left_ = switch_left;
+        last_switch_right_ = switch_right;
     }
 
     auto activate_ctrl_hold() -> void {
@@ -316,6 +339,11 @@ private:
 
     auto reset_all_controls() -> void {
         deactivate_ctrl_hold();
+        pitch_lock_active_ = false;
+        remote_low_prone_enabled_by_toggle_ = false;
+        remote_low_prone_toggle_left_down_pending_ = false;
+        last_switch_left_ = rmcs_msgs::Switch::UNKNOWN;
+        last_switch_right_ = rmcs_msgs::Switch::UNKNOWN;
         gimbal_solver_.update(TwoAxisGimbalSolver::SetDisabled{});
         *output_.yaw_angle_error   = kNaN;
         *output_.pitch_angle_error = kNaN;
@@ -355,6 +383,11 @@ private:
     double ctrl_hold_pitch_target_angle_ = 0.0;
     double pitch_gravity_ff_gain_ = 0.0;
     double pitch_gravity_ff_phase_ = 0.0;
+    bool pitch_lock_active_ = false;
+    bool remote_low_prone_enabled_by_toggle_ = false;
+    bool remote_low_prone_toggle_left_down_pending_ = false;
+    rmcs_msgs::Switch last_switch_right_ = rmcs_msgs::Switch::UNKNOWN;
+    rmcs_msgs::Switch last_switch_left_ = rmcs_msgs::Switch::UNKNOWN;
     bool ctrl_hold_active_ = false;
 };
 
