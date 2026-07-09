@@ -9,6 +9,7 @@
 #include "controller/adrc/eso.hpp"
 #include "controller/adrc/nlesf.hpp"
 #include "controller/adrc/td.hpp"
+#include "controller/pid/pid_calculator.hpp"
 
 namespace rmcs_core::controller::chassis {
 
@@ -45,6 +46,11 @@ public:
         }
         register_output(get_parameter("control").as_string(), control_torque_, nan_);
 
+        if (has_parameter("pid_mode")) {
+            register_input(get_parameter("pid_mode").as_string(), pid_mode_, false);
+            has_pid_mode_ = true;
+        }
+
         load_config_();
         apply_config_();
     }
@@ -58,9 +64,17 @@ public:
 
         initialize_if_needed_(inputs);
         double control_torque = nan_;
-        if (!run_joint_servo_(inputs, control_torque)) {
-            disable_output_();
-            return;
+
+        if (active_pid_mode_()) {
+            if (!run_pid_servo_(inputs, control_torque)) {
+                disable_output_();
+                return;
+            }
+        } else {
+            if (!run_joint_servo_(inputs, control_torque)) {
+                disable_output_();
+                return;
+            }
         }
 
         publish_control_output_(control_torque);
@@ -122,6 +136,10 @@ private:
         if (config_.output_min > config_.output_max) {
             std::swap(config_.output_min, config_.output_max);
         }
+
+        if (has_pid_mode_) {
+            load_pid_config_();
+        }
     }
 
     bool read_inputs_(InputSnapshot& inputs) const {
@@ -167,9 +185,45 @@ private:
         return std::isfinite(control_torque);
     }
 
+    bool active_pid_mode_() const {
+        return has_pid_mode_ && pid_mode_.ready() && *pid_mode_;
+    }
+
+    void load_pid_config_() {
+        pid_kp_ = load_parameter_or(*this, "pid_kp", 5.0);
+        pid_ki_ = load_parameter_or(*this, "pid_ki", 0.0);
+        pid_kd_ = load_parameter_or(*this, "pid_kd", 1.0);
+        pid_output_min_ = load_parameter_or(
+            *this, "pid_output_min", -std::numeric_limits<double>::infinity());
+        pid_output_max_ = load_parameter_or(
+            *this, "pid_output_max", std::numeric_limits<double>::infinity());
+        if (pid_output_min_ > pid_output_max_)
+            std::swap(pid_output_min_, pid_output_max_);
+
+        pid_integral_min_ = load_parameter_or(
+            *this, "pid_integral_min", -std::numeric_limits<double>::infinity());
+        pid_integral_max_ = load_parameter_or(
+            *this, "pid_integral_max", std::numeric_limits<double>::infinity());
+
+        pid_.kp = pid_kp_;
+        pid_.ki = pid_ki_;
+        pid_.kd = pid_kd_;
+        pid_.output_min = pid_output_min_;
+        pid_.output_max = pid_output_max_;
+        pid_.integral_min = pid_integral_min_;
+        pid_.integral_max = pid_integral_max_;
+    }
+
+    bool run_pid_servo_(const InputSnapshot& inputs, double& control_torque) {
+        const double error = inputs.setpoint_angle - inputs.measurement_angle;
+        control_torque = pid_.update(error);
+        return std::isfinite(control_torque);
+    }
+
     void reset_states_(double measurement_angle, double setpoint_angle) {
         td_.reset(setpoint_angle, 0.0);
         eso_.reset(measurement_angle);
+        pid_.reset();
         last_u_ = 0.0;
     }
 
@@ -181,6 +235,7 @@ private:
     void disable_output_() {
         initialized_ = false;
         last_u_ = 0.0;
+        pid_.reset();
         *control_torque_ = nan_;
     }
 
@@ -204,6 +259,18 @@ private:
     double last_u_ = 0.0;
     bool use_setpoint_velocity_ = false;
     bool initialized_ = false;
+
+    bool has_pid_mode_ = false;
+    InputInterface<bool> pid_mode_;
+
+    pid::PidCalculator pid_;
+    double pid_kp_ = 5.0;
+    double pid_ki_ = 0.0;
+    double pid_kd_ = 1.0;
+    double pid_output_min_ = -std::numeric_limits<double>::infinity();
+    double pid_output_max_ = std::numeric_limits<double>::infinity();
+    double pid_integral_min_ = -std::numeric_limits<double>::infinity();
+    double pid_integral_max_ = std::numeric_limits<double>::infinity();
 };
 
 } // namespace rmcs_core::controller::chassis

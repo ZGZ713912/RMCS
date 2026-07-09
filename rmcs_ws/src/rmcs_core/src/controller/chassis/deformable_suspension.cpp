@@ -125,7 +125,7 @@ public:
             filtered_pitch_rate, filtered_roll_rate, *active_suspension_active_,
             *passive_suspension_active_, *low_prone_active_, *min_angle_deg_, *max_angle_deg_,
             *suspension_reference_angle_deg_, *correction_inverted_, joint_angle_states,
-            current_joint_torques, dt);
+            current_physical_angles, current_joint_torques, dt);
 
         const auto target_angles_rad = compute_joint_trajectory_targets_(
             posture_target_angles_rad, *active_suspension_active_, *low_prone_active_,
@@ -222,13 +222,10 @@ private:
             get_parameter_or("active_suspension_rate_lpf_cutoff_hz", 10.0), 1e-6);
 
         passive_enabled_ = get_parameter_or("passive_suspension_enable", true);
-        passive_kp_ = get_parameter_or("passive_suspension_kp", 0.035);
-        passive_ki_ = get_parameter_or("passive_suspension_ki", 0.005);
-        passive_deadband_ = std::max(get_parameter_or("passive_suspension_deadband", 0.08), 0.0);
-        passive_integral_limit_ =
-            std::max(get_parameter_or("passive_suspension_integral_limit", 3.0), 0.0);
         passive_load_lpf_alpha_ =
             std::clamp(get_parameter_or("passive_suspension_load_lpf_alpha", 0.08), 0.0, 1.0);
+        passive_load_deadband_ =
+            std::max(get_parameter_or("passive_suspension_load_deadband", 0.0), 0.0);
         passive_max_correction_rad_ = std::max(
             deg_to_rad_(
                 std::abs(get_parameter_or("passive_suspension_max_angle_correction_deg", 8.0))),
@@ -241,6 +238,26 @@ private:
             deg_to_rad_(std::abs(
                 get_parameter_or("passive_suspension_correction_acceleration_limit_deg", 720.0))),
             1e-6);
+        passive_rod_length_ =
+            std::max(std::abs(get_parameter_or("passive_suspension_rod_length", 0.150)), 1e-6);
+        passive_chassis_radius_base_ =
+            std::max(get_parameter_or("passive_suspension_chassis_radius_base", 0.2341741), 1e-6);
+        passive_min_geometry_cos_ =
+            std::clamp(get_parameter_or("passive_suspension_min_geometry_cos", 0.2), 1e-3, 1.0);
+        passive_com_height_ =
+            std::max(get_parameter_or("passive_suspension_com_height", 0.0), 0.0);
+        passive_slope_pitch_gain_ = get_parameter_or("passive_suspension_slope_pitch_gain", 1.0);
+        passive_slope_roll_gain_ = get_parameter_or("passive_suspension_slope_roll_gain", 1.0);
+
+        load_pid_(
+            "passive_suspension_pitch_", passive_pitch_pid_, 0.003, 0.0, 0.0, -3000.0,
+            3000.0, -passive_max_correction_rad_, passive_max_correction_rad_);
+        load_pid_(
+            "passive_suspension_roll_", passive_roll_pid_, 0.003, 0.0, 0.0, -3000.0,
+            3000.0, -passive_max_correction_rad_, passive_max_correction_rad_);
+        load_pid_(
+            "passive_suspension_warp_", passive_warp_pid_, 0.003, 0.0, 0.0, -3000.0,
+            3000.0, -passive_max_correction_rad_, passive_max_correction_rad_);
 
         passive_load_sign_[kLeftFront] =
             get_parameter_or("passive_suspension_load_sign_left_front", -1.0);
@@ -318,7 +335,9 @@ private:
     void reset_passive_state_() {
         passive_load_initialized_ = false;
         passive_filtered_load_proxy_.fill(0.0);
-        passive_load_integral_.fill(0.0);
+        passive_pitch_pid_.reset();
+        passive_roll_pid_.reset();
+        passive_warp_pid_.reset();
     }
 
     void reset_calibration_window_() {
@@ -449,7 +468,51 @@ private:
         }
     }
 
-    void update_passive_targets_(const std::array<double, kJointCount>& joint_torques, double dt) {
+    double apply_passive_load_deadband_(double load_error) const {
+        if (std::abs(load_error) <= passive_load_deadband_)
+            return 0.0;
+        return load_error;
+    }
+
+    double passive_geometry_moment_arm_(double joint_physical_angle) const {
+        const double cos_angle = std::abs(std::cos(joint_physical_angle));
+        return passive_rod_length_ * std::max(cos_angle, passive_min_geometry_cos_);
+    }
+
+    double passive_joint_normal_load_proxy_(
+        size_t index, double joint_torque, double joint_physical_angle) const {
+        const double joint_torque_proxy = passive_load_sign_[index]
+                                        * (joint_torque - passive_load_bias_[index]);
+        return joint_torque_proxy / passive_geometry_moment_arm_(joint_physical_angle);
+    }
+
+    double passive_support_half_span_(
+        const std::array<double, kJointCount>& joint_physical_angles) const {
+        double support_radius = 0.0;
+        for (double joint_physical_angle : joint_physical_angles)
+            support_radius += passive_chassis_radius_base_
+                            + passive_rod_length_ * std::cos(joint_physical_angle);
+        support_radius /= static_cast<double>(kJointCount);
+        return std::max(support_radius / std::numbers::sqrt2, 1e-6);
+    }
+
+    double passive_slope_load_target_(
+        double total_load, double attitude, double support_half_span, double slope_gain) const {
+        if (passive_com_height_ <= 1e-6 || support_half_span <= 1e-6)
+            return 0.0;
+
+        constexpr double max_slope_attitude = 30.0 * std::numbers::pi / 180.0;
+        const double clamped_attitude =
+            std::clamp(attitude, -max_slope_attitude, max_slope_attitude);
+        const double com_projection = passive_com_height_ * std::tan(clamped_attitude);
+        // front - rear = -total · h · tan(θ) / s   (nose-up → front lighter)
+        return -slope_gain * total_load * com_projection / (2.0 * support_half_span);
+    }
+
+    void update_passive_targets_(
+        const std::array<double, kJointCount>& joint_torques,
+        const std::array<double, kJointCount>& joint_physical_angles, double pitch, double roll,
+        double dt) {
         if (dt <= 0.0 || !std::isfinite(dt)) {
             correction_target_rad_.fill(0.0);
             return;
@@ -457,13 +520,14 @@ private:
 
         std::array<double, kJointCount> load_proxy{};
         for (size_t i = 0; i < kJointCount; ++i) {
-            if (!std::isfinite(joint_torques[i])) {
+            if (!std::isfinite(joint_torques[i]) || !std::isfinite(joint_physical_angles[i])) {
                 correction_target_rad_.fill(0.0);
                 reset_passive_state_();
                 return;
             }
 
-            load_proxy[i] = passive_load_sign_[i] * (joint_torques[i] - passive_load_bias_[i]);
+            load_proxy[i] =
+                passive_joint_normal_load_proxy_(i, joint_torques[i], joint_physical_angles[i]);
             if (!passive_load_initialized_) {
                 passive_filtered_load_proxy_[i] = load_proxy[i];
             } else {
@@ -473,23 +537,61 @@ private:
         }
         passive_load_initialized_ = true;
 
-        double load_average = 0.0;
-        for (double load : passive_filtered_load_proxy_)
-            load_average += load;
-        load_average /= static_cast<double>(kJointCount);
+        // Map loads to positive convention (positive = more load-bearing)
+        // because passive_load_sign_ can make the raw proxy negative.
+        std::array<double, kJointCount> abs_load{};
+        double total_load = 0.0;
+        for (size_t i = 0; i < kJointCount; ++i) {
+            abs_load[i] = std::abs(passive_filtered_load_proxy_[i]);
+            total_load += abs_load[i];
+        }
+
+        if (total_load < 1e-6) {
+            correction_target_rad_.fill(0.0);
+            return;
+        }
+
+        const double front_back_load =
+            (abs_load[kLeftFront] + abs_load[kRightFront] - abs_load[kLeftBack]
+             - abs_load[kRightBack])
+            / 2.0;
+        const double left_right_load =
+            (abs_load[kLeftFront] + abs_load[kLeftBack] - abs_load[kRightFront]
+             - abs_load[kRightBack])
+            / 2.0;
+        const double diagonal_load =
+            (abs_load[kLeftFront] + abs_load[kRightBack] - abs_load[kLeftBack]
+             - abs_load[kRightFront])
+            / 2.0;
+
+        const double support_half_span = passive_support_half_span_(joint_physical_angles);
+        const double front_back_target = passive_slope_load_target_(
+            total_load, pitch, support_half_span, passive_slope_pitch_gain_);
+        const double left_right_target = passive_slope_load_target_(
+            total_load, roll, support_half_span, passive_slope_roll_gain_);
+
+        const double front_back_error =
+            apply_passive_load_deadband_(front_back_load - front_back_target);
+        const double left_right_error =
+            apply_passive_load_deadband_(left_right_load - left_right_target);
+        const double diagonal_error = apply_passive_load_deadband_(diagonal_load);
+
+        const double pitch_correction = passive_pitch_pid_.update(-front_back_error);
+        const double roll_correction = passive_roll_pid_.update(-left_right_error);
+        const double warp_correction = passive_warp_pid_.update(-diagonal_error);
+
+        if (!std::isfinite(pitch_correction) || !std::isfinite(roll_correction)
+            || !std::isfinite(warp_correction)) {
+            correction_target_rad_.fill(0.0);
+            reset_passive_state_();
+            return;
+        }
 
         std::array<double, kJointCount> raw_targets{};
-        for (size_t i = 0; i < kJointCount; ++i) {
-            double load_error = load_average - passive_filtered_load_proxy_[i];
-            if (std::abs(load_error) <= passive_deadband_)
-                load_error = 0.0;
-
-            passive_load_integral_[i] = std::clamp(
-                passive_load_integral_[i] + load_error * dt, -passive_integral_limit_,
-                passive_integral_limit_);
-
-            raw_targets[i] = passive_kp_ * load_error + passive_ki_ * passive_load_integral_[i];
-        }
+        raw_targets[kLeftFront] = pitch_correction + roll_correction + warp_correction;
+        raw_targets[kLeftBack] = -pitch_correction + roll_correction - warp_correction;
+        raw_targets[kRightBack] = -pitch_correction - roll_correction + warp_correction;
+        raw_targets[kRightFront] = pitch_correction - roll_correction - warp_correction;
 
         double raw_target_mean = 0.0;
         for (double raw_target : raw_targets)
@@ -557,10 +659,11 @@ private:
         bool passive_suspension_active, bool low_prone_override_active, double min_angle_deg,
         double max_angle_deg, double base_angle_deg, bool correction_inverted,
         const std::array<double, kJointCount>& base_joint_angles,
+        const std::array<double, kJointCount>& joint_physical_angles,
         const std::array<double, kJointCount>& joint_torques, double dt) {
         if (passive_suspension_active && passive_enabled_) {
             reset_attitude_();
-            update_passive_targets_(joint_torques, dt);
+            update_passive_targets_(joint_torques, joint_physical_angles, pitch, roll, dt);
             run_correction_trajectory_(
                 low_prone_override_active, min_angle_deg, max_angle_deg, base_angle_deg,
                 base_joint_angles, passive_correction_vel_limit_, passive_correction_acc_limit_,
@@ -727,14 +830,20 @@ private:
     double active_rate_filter_sampling_hz_ = 0.0;
 
     bool passive_enabled_ = true;
-    double passive_kp_ = 0.035;
-    double passive_ki_ = 0.005;
-    double passive_deadband_ = 0.08;
-    double passive_integral_limit_ = 3.0;
+    pid::PidCalculator passive_pitch_pid_{};
+    pid::PidCalculator passive_roll_pid_{};
+    pid::PidCalculator passive_warp_pid_{};
+    double passive_load_deadband_ = 0.0;
     double passive_load_lpf_alpha_ = 0.08;
     double passive_max_correction_rad_ = deg_to_rad_(8.0);
     double passive_correction_vel_limit_ = deg_to_rad_(180.0);
     double passive_correction_acc_limit_ = deg_to_rad_(720.0);
+    double passive_rod_length_ = 0.150;
+    double passive_chassis_radius_base_ = 0.2341741;
+    double passive_min_geometry_cos_ = 0.2;
+    double passive_com_height_ = 0.0;
+    double passive_slope_pitch_gain_ = 1.0;
+    double passive_slope_roll_gain_ = 1.0;
     std::array<double, kJointCount> passive_load_sign_ = {-1.0, -1.0, -1.0, -1.0};
     std::array<double, kJointCount> passive_load_bias_ = {0.0, 0.0, 0.0, 0.0};
 
@@ -751,7 +860,6 @@ private:
 
     bool passive_load_initialized_ = false;
     std::array<double, kJointCount> passive_filtered_load_proxy_ = {0.0, 0.0, 0.0, 0.0};
-    std::array<double, kJointCount> passive_load_integral_ = {0.0, 0.0, 0.0, 0.0};
 
     std::array<double, kJointCount> correction_target_rad_ = {0.0, 0.0, 0.0, 0.0};
     std::array<double, kJointCount> correction_state_rad_ = {0.0, 0.0, 0.0, 0.0};
