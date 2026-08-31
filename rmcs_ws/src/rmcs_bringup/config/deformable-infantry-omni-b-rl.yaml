@@ -1,0 +1,107 @@
+# ============================================================================
+# deformable-infantry-omni-b-rl.yaml — 变形底盘 omni-b 主动悬挂 RL 部署（验证配置）
+#
+# RL 替代：DeformableSuspension（姿态外环）+ 4×DeformableJointController（ADRC 内环）
+#   —— 4 个关节电机由 RL 策略直接驱动（位置 PD → 力矩）
+# 保留：轮速底盘控制（DeformableChassis + DeformableOmniWheelController）——
+#   本轮验证聚焦悬挂，轮控组件按需追加（其 /remote/* 输入需遥控组件提供）
+# 策略：legged_gym deformable_suspension 训练导出 ONNX（obs[1,22] -> actions[1,4] float32）
+# 合同：cmd3 | height1 | angvel3 | gravity3 | pos4(physical) | vel4 | act4
+# 启动：set-robot deformable-infantry-omni-b-rl && launch-rmcs
+# ============================================================================
+
+rmcs_executor:
+  ros__parameters:
+    update_rate: 1000.0
+    components:
+      - rmcs_core::hardware::DeformableInfantryOmniB -> deformable_infantry
+      # 输出: /chassis/{lf,lb,rb,rf}_joint/physical_{angle,velocity}
+      #       /chassis/imu/{quaternion,angular_velocity}
+      # 输入: /chassis/{...}_joint/control_torque（Command partner 内 LkMotor 注册）
+      - rmcs::rl::RlController -> rl_controller
+      - rmcs::rl::RlDebugCommand -> rl_debug_command
+      - rmcs_core::broadcaster::ValueBroadcaster -> value_broadcaster
+
+deformable_infantry:
+  ros__parameters:
+    serial_filter_bottom_board: "AF-73B2-E8A1-A544-79ED-5BDA-D088-7F21-A6A6"
+    serial_filter_top_board: "AF-C26A-0C9C-CF41-3E3C-1596-524B-7527-5744"
+    chassis_radius: 0.2341741
+    rod_length: 0.140
+    yaw_motor_zero_point: 57900
+    pitch_motor_zero_point: 56354
+
+rl_controller:
+  ros__parameters:
+    # ---- 模型与推理 ----
+    rl_model_path: "models/policy.onnx"   # 训练导出（obs[1,22] -> actions[1,4] float32）
+    rl_inference_frequency: 100.0         # 悬挂控制频率（训练 sim dt 0.005 × decimation 2）
+    rl_publish_network_io: true
+
+    # ---- 机器人描述 ----
+    # 关节序与硬件/训练 DOF 一致：lf, lb, rb, rf（physical 角，rad）
+    joint_names: [left_front_joint, left_back_joint, right_back_joint, right_front_joint]
+    joint_base_path: "/chassis"
+    position_pd_joints: [0, 1, 2, 3]
+    # velocity_pd_joints 省略 = 默认空（rcl 参数文件不支持空列表，[] 会落盘为
+    # PARAMETER_NOT_SET 导致参数读取异常；代码默认值即为空组，轮子不进策略）
+    # 关节反馈在训练坐标系下以 physical_* 命名（physical = 62.5° - 电机角）
+    position_group_angle_suffix: "/physical_angle"
+    position_group_velocity_suffix: "/physical_velocity"
+    rl_obs_size: 22                       # 10+3×4
+    rl_action_size: 4
+
+    # ---- 策略合同（与 legged_gym deformable_suspension 一致，勿改）----
+    default_dof_pos: [0.0, 0.0, 0.0, 0.0]   # TODO 真机标定：水平站立位姿（physical 角 rad）
+    dof_pos_limits_lower: [0.0, 0.0, 0.0, 0.0]
+    dof_pos_limits_upper: [1.05, 1.05, 1.05, 1.05]   # 机械范围约 8°~59°（0.14~1.03 rad）
+    position_action_scale: 0.25
+    position_kp: 200.0                    # 训练 PD（sim 值，部署保持一致）
+    position_kd: 4.0
+    position_torque_max: 20.0             # TODO 标定 LK 力矩量纲后按训练 torque_limits 收紧
+
+    # ---- 观测缩放（训练 normalization.obs_scales）----
+    obs_height_scale: 5.0
+    obs_ang_vel_scale: 0.5
+    obs_gravity_scale: 1.0
+    obs_dof_pos_scale: 1.0
+    obs_dof_vel_scale: 0.1
+    clip_observations: 100.0
+    clip_actions: 100.0
+
+    # ---- 指令（v1：悬挂策略，平移/转向指令禁用；height 为目标车高）----
+    # 路线 A 三档基准：普通 0.132 / 高 0.16+（超物理上限 → 饱和到机械极限 = 尽量高）/
+    # 低 0.05~0.06（关节 0~57° 全范围有效，≈ 机械下限 = 尽量低）
+    motion_linear_x_min: 0.0
+    motion_linear_x_max: 0.0
+    motion_angular_z_min: 0.0
+    motion_angular_z_max: 0.0
+    command_height_min: 0.05
+    command_height_max: 0.17
+    default_command_height: 0.132         # 与训练 height_range [0.05, 0.17] 对齐（车体原点高度）
+
+    # ---- FSM / PREPARE ----
+    auto_enter_rl: false                  # 调试期保持 false，topic state=3 手动进 RL
+    prepare_dof_pos: [0.0, 0.0, 0.0, 0.0] # TODO 标定：预备位 = 水平站立
+    prepare_kp: 80.0
+    prepare_kd: 2.0
+    prepare_max_velocity: 1.0             # 插值速度上限 rad/s
+    prepare_reach_threshold: 0.02
+
+rl_debug_command:
+  ros__parameters:
+    command_base: "/chassis"
+
+value_broadcaster:
+  ros__parameters:
+    forward_list:
+      - /chassis/imu/pitch
+      - /chassis/imu/roll
+      - /chassis/imu/pitch_rate
+      - /chassis/imu/roll_rate
+      - /chassis/left_front_joint/physical_angle
+      - /chassis/left_back_joint/physical_angle
+      - /chassis/right_back_joint/physical_angle
+      - /chassis/right_front_joint/physical_angle
+      # 注：ValueBroadcaster 仅支持 double；/chassis/rl/state(int) 与
+      # /chassis/rl/observation(vector) 需用日志/后续扩展查看

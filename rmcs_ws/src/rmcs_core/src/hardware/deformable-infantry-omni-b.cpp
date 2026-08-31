@@ -366,6 +366,11 @@ private:
             status.register_output("/chassis/imu/roll", chassis_imu_roll_, 0.0);
             status.register_output("/chassis/imu/pitch_rate", chassis_imu_pitch_rate_, 0.0);
             status.register_output("/chassis/imu/roll_rate", chassis_imu_roll_rate_, 0.0);
+            status.register_output(
+                "/chassis/imu/quaternion", imu_quaternion_output_, Eigen::Quaterniond::Identity());
+            status.register_output(
+                "/chassis/imu/angular_velocity", imu_angular_velocity_output_,
+                Eigen::Vector3d::Zero());
             for (size_t i = 0; i < 4; ++i) {
                 status.register_output(
                     std::format(
@@ -410,6 +415,13 @@ private:
                 *chassis_imu_pitch_rate_ = -imu_.gy();
                 *chassis_imu_roll_rate_ = imu_.gx();
             }
+
+            // RL 部署接口（与 wheel-leg-infantry 约定一致）：世界→机体四元数（wxyz）
+            // 与机体系角速度（rad/s）。update_status 已先应用 set_coordinate_mapping，
+            // 故 q/g 与 pitch/roll 输出处于同一坐标系。
+            *imu_quaternion_output_ =
+                Eigen::Quaterniond(imu_.q0(), imu_.q1(), imu_.q2(), imu_.q3()).normalized();
+            *imu_angular_velocity_output_ = Eigen::Vector3d(imu_.gx(), imu_.gy(), imu_.gz());
 
             for (auto& motor : chassis_wheel_motors_)
                 motor.update_status();
@@ -565,6 +577,8 @@ private:
         OutputInterface<double> chassis_imu_roll_;
         OutputInterface<double> chassis_imu_pitch_rate_;
         OutputInterface<double> chassis_imu_roll_rate_;
+        OutputInterface<Eigen::Quaterniond> imu_quaternion_output_;
+        OutputInterface<Eigen::Vector3d> imu_angular_velocity_output_;
 
         std::array<OutputInterface<double>, 4> joint_physical_angle_;
         std::array<OutputInterface<double>, 4> joint_physical_velocity_;
