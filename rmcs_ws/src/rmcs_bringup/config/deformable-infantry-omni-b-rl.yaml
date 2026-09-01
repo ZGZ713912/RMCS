@@ -1,15 +1,3 @@
-# ============================================================================
-# deformable-infantry-omni-b-rl.yaml — 变形底盘 omni-b 主动悬挂 RL 部署（验证配置）
-#
-# RL 替代：DeformableSuspension（姿态外环）+ 4×DeformableJointController（ADRC 内环）
-#   —— 4 个关节电机由 RL 策略直接驱动（位置 PD → 力矩）
-# 保留：轮速底盘控制（DeformableChassis + DeformableOmniWheelController）——
-#   本轮验证聚焦悬挂，轮控组件按需追加（其 /remote/* 输入需遥控组件提供）
-# 策略：legged_gym deformable_suspension 训练导出 ONNX（obs[1,22] -> actions[1,4] float32）
-# 合同：cmd3 | height1 | angvel3 | gravity3 | pos4(physical) | vel4 | act4
-# 启动：set-robot deformable-infantry-omni-b-rl && launch-rmcs
-# ============================================================================
-
 rmcs_executor:
   ros__parameters:
     update_rate: 1000.0
@@ -19,8 +7,37 @@ rmcs_executor:
       #       /chassis/imu/{quaternion,angular_velocity}
       # 输入: /chassis/{...}_joint/control_torque（Command partner 内 LkMotor 注册）
       - rmcs::rl::RlController -> rl_controller
+      # 命令源（必需）：提供 /chassis/command/{vx,yaw_rate,height,state} 与 /chassis/reset_count，
+      # 无它 FSM 无 state 命令可收 → 永远卡 INIT → 力矩恒 0（auto_enter_rl 也需先到 PREPARE）
       - rmcs::rl::RlDebugCommand -> rl_debug_command
+
+      - rmcs_core::referee::Status -> referee_status
+      - rmcs_core::referee::Command -> referee_command
+      - rmcs_core::referee::command::Interaction -> referee_interaction
+      - rmcs_core::referee::command::interaction::Ui -> referee_ui
+      # 注：DeformableInfantry 专用 UI（referee_ui_infantry）依赖摩擦轮/拨弹链的
+      #     /gimbal/{left,right}_friction/{working_velocity,control_velocity} 输出，
+      #     未引入发射机构前不装配（缺 required 输入会启动失败）
+
+      # 轮速底盘控制链（/remote/* 由硬件 DR16 提供；RL 只接管悬挂关节，不接管轮速）
+      - rmcs_core::controller::chassis::DeformableChassis -> chassis_controller
+      - rmcs_core::controller::chassis::ChassisPowerController -> chassis_power_controller
+      - rmcs_core::controller::chassis::DeformableOmniWheelController -> deformable_chassis_controller
+
       - rmcs_core::broadcaster::ValueBroadcaster -> value_broadcaster
+      
+value_broadcaster:
+  ros__parameters:
+    forward_list:
+      - /chassis/left_front_joint/control_torque   # 命令力矩
+      - /chassis/left_back_joint/control_torque
+      - /chassis/right_back_joint/control_torque
+      - /chassis/right_front_joint/control_torque
+      - /chassis/left_front_joint/torque           # 电机实测力矩（证明电机真执行了）
+      - /chassis/left_back_joint/torque
+      - /chassis/right_back_joint/torque
+      - /chassis/right_front_joint/torque
+
 
 deformable_infantry:
   ros__parameters:
@@ -30,6 +47,19 @@ deformable_infantry:
     rod_length: 0.140
     yaw_motor_zero_point: 57900
     pitch_motor_zero_point: 56354
+
+chassis_controller:
+  ros__parameters:
+    # 实测机械限位（腿与水平面的夹角，度；硬件零点已标定 73.31°−电机角）：
+    #   最低位 5°（实测），最高位 77.11°（=66.30°+10.81° 推算，建议实测复核）
+    min_angle: 5.0
+    max_angle: 77.11
+    # RL 部署：悬挂由策略接管，本机无 DeformableSuspension 消费姿态外环状态，
+    # 置 false 避免遥控切出无意义的 active 悬挂档位（关节目标仅作姿态参考输出）
+    active_suspension_enable: false
+    wireless_charging_offset_deg: 225.0
+    wireless_charging_speed_limit: 0.6
+    wireless_charging_angular_velocity_limit: 10.0
 
 rl_controller:
   ros__parameters:
@@ -45,16 +75,19 @@ rl_controller:
     position_pd_joints: [0, 1, 2, 3]
     # velocity_pd_joints 省略 = 默认空（rcl 参数文件不支持空列表，[] 会落盘为
     # PARAMETER_NOT_SET 导致参数读取异常；代码默认值即为空组，轮子不进策略）
-    # 关节反馈在训练坐标系下以 physical_* 命名（physical = 62.5° - 电机角）
+    # 关节反馈在训练坐标系下以 physical_* 命名（physical = 腿与水平面的夹角，硬件零点 73.31°−电机角）
     position_group_angle_suffix: "/physical_angle"
     position_group_velocity_suffix: "/physical_velocity"
     rl_obs_size: 22                       # 10+3×4
     rl_action_size: 4
 
     # ---- 策略合同（与 legged_gym deformable_suspension 一致，勿改）----
-    default_dof_pos: [0.0, 0.0, 0.0, 0.0]   # TODO 真机标定：水平站立位姿（physical 角 rad）
-    dof_pos_limits_lower: [0.0, 0.0, 0.0, 0.0]
-    dof_pos_limits_upper: [1.05, 1.05, 1.05, 1.05]   # 机械范围约 8°~59°（0.14~1.03 rad）
+    # 角度约定：physical 角 = 腿与水平面的夹角（硬件零点已标定 73.31°−电机角）。
+    # 名义站姿（训练 q=0 对齐）= 水平夹角 10.81° = 0.1887 rad
+    default_dof_pos: [0.1887, 0.1887, 0.1887, 0.1887]
+    # 实测机械行程（水平夹角 rad）：最低 5°=0.0873，最高 77.11°=1.3458（max 为推算，建议实测复核）
+    dof_pos_limits_lower: [0.0873, 0.0873, 0.0873, 0.0873]
+    dof_pos_limits_upper: [1.3458, 1.3458, 1.3458, 1.3458]
     position_action_scale: 0.25
     position_kp: 200.0                    # 训练 PD（sim 值，部署保持一致）
     position_kd: 4.0
@@ -81,8 +114,8 @@ rl_controller:
     default_command_height: 0.132         # 与训练 height_range [0.05, 0.17] 对齐（车体原点高度）
 
     # ---- FSM / PREPARE ----
-    auto_enter_rl: false                  # 调试期保持 false，topic state=3 手动进 RL
-    prepare_dof_pos: [0.0, 0.0, 0.0, 0.0] # TODO 标定：预备位 = 水平站立
+    auto_enter_rl: false                  # 手动流程：pub state=2 → 等 PREPARE 完成 → pub state=3
+    prepare_dof_pos: [0.1887, 0.1887, 0.1887, 0.1887] # 预备位 = 名义站姿（10.81°，与训练 default 一致）
     prepare_kp: 80.0
     prepare_kd: 2.0
     prepare_max_velocity: 1.0             # 插值速度上限 rad/s
@@ -91,17 +124,15 @@ rl_controller:
 rl_debug_command:
   ros__parameters:
     command_base: "/chassis"
+    # 注：obs/action/state 的真 ROS topic 由 rl_controller 直接发布（rl_publish_network_io: true），
+    #     同名组件接口：/chassis/rl/{observation,action,state}（Float64MultiArray / Int32）
 
-value_broadcaster:
+deformable_chassis_controller:
   ros__parameters:
-    forward_list:
-      - /chassis/imu/pitch
-      - /chassis/imu/roll
-      - /chassis/imu/pitch_rate
-      - /chassis/imu/roll_rate
-      - /chassis/left_front_joint/physical_angle
-      - /chassis/left_back_joint/physical_angle
-      - /chassis/right_back_joint/physical_angle
-      - /chassis/right_front_joint/physical_angle
-      # 注：ValueBroadcaster 仅支持 double；/chassis/rl/state(int) 与
-      # /chassis/rl/observation(vector) 需用日志/后续扩展查看
+    mass: 25.5
+    moment_of_inertia: 1.0
+    wheel_radius: 0.075
+    friction_coefficient: 6.6
+    k1: 2.958580e+00
+    k2: 3.082190e-03
+    no_load_power: 11.37

@@ -550,7 +550,9 @@ private:
             }
         }
 
-        static constexpr double kJointZeroPhysicalAngleRad = 62.5 * std::numbers::pi / 180.0;
+        // physical 角 = 与水平面的夹角（度）。零点 73.31° = 原 62.5° + 10.81°：
+        // 实测最低位（水平夹角 5°）对应电机角 68.31° → 5° = 73.31° − 68.31°。
+        static constexpr double kJointZeroPhysicalAngleRad = 73.31 * std::numbers::pi / 180.0;
 
         DeformableInfantryOmniC& status_;
         Component& command_;
