@@ -24,8 +24,8 @@
 ### RMCS 侧（分支 deformable_test_RL）
 | 文件 | 改动 |
 |---|---|
-| `rmcs_ws/src/rmcs_rl/src/rl_controller.cpp` | 新增分组接口后缀参数（position/velocity 组各自 angle/velocity 后缀，默认 `/angle`、`/velocity`，向后兼容） |
-| `rmcs_ws/src/rmcs_rl/src/rl_debug_command.cpp` | 新增：订阅 topic 写 command 接口的调试指令源组件 |
+| `rmcs_ws/src/rmcs_rl/src/component/rl_controller.cpp` | 新增分组接口后缀参数（position/velocity 组各自 angle/velocity 后缀，默认 `/angle`、`/velocity`，向后兼容） |
+| `rmcs_ws/src/rmcs_rl/src/component/rl_debug_command.cpp` | 新增：订阅 topic 写 command 接口的调试指令源组件 |
 | `rmcs_ws/src/rmcs_rl/plugins.xml` / `package.xml` | 注册 RlDebugCommand / 增加 std_msgs 依赖 |
 | `rmcs_ws/src/rmcs_rl/tool/gen_synthetic_policy.py` | synthetic ONNX 生成（合同校验用） |
 | `rmcs_ws/src/rmcs_rl/tool/check_policy_contract.py` | ONNX 合同检查（名字/形状/dtype/有限性） |
