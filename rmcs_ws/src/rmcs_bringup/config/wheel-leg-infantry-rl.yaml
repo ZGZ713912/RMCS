@@ -106,17 +106,22 @@ wheel_leg_joint_velocity_controller:
   ros__parameters:
     # 单圈反馈 -> 整腿转向(圆周) + 开合差值(有界) -> 同侧两路速度。
     # 仅整腿转向选弧；开合误差不取短弧。无累加圈数、独立轴轨迹或越界前馈。
-    angle_kp: 6.0
-    max_joint_velocity: 2.0
+    angle_kp: 40.0
+    max_joint_velocity: 6.0
     max_joint_acceleration: 4.0
     max_feedback_speed: 45.0
     max_feedback_jump: 0.5
-    # V5六闭环直接求解的30–120度区间（120度不再使用线性外推）。
-    min_motor_difference: -0.47376
-    max_motor_difference: 1.62433
-    motor_difference_margin: 0.04
-    # 仅容纳反馈/模型误差，超出即停止；没有自动大速度纠偏。
+    # 实车被动膝约45–105度；Isaac轴心测量结合现有offset的两个端点。
+    # d_L=wrap(左髋-左膝), d_R=wrap(右膝-右髋)。URDF零位d=0，标定零位d=1.33。
+    min_motor_difference: 0.0
+    max_motor_difference: 1.33
+    # 两个固定模式正好位于工作区端点，不把目标向内改写0.04 rad。
+    motor_difference_margin: 0.0
+    # 下侧反馈容差。两侧未分别配置时，控制器兼容原来的对称容差。
     motor_difference_tolerance: 0.03
+    # 被动膝110度对应 d≈1.42846；上侧放行到1.33+0.0985≈1.4285 rad。
+    # 这是反馈准入余量；超过目标工作区时，开合速度仍只允许向区间内。
+    motor_difference_upper_tolerance: 0.0985
 
 policy_server:
   ros__parameters:

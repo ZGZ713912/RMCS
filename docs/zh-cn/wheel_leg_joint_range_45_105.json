@@ -1,0 +1,1201 @@
+{
+  "method": "42 PhysX closed-chain instances, 19 bodies / 6 live loops each; measure H-K and W-K projected into the passive knee hinge plane from body_link_pose_w",
+  "physical_range_given_by_user_deg": [
+    45.0,
+    105.0
+  ],
+  "physical_range_is_simulation_discovery": false,
+  "fixture": "fixed base, gravity/gas spring off, only four active motors hold each sample for 1 s, passive joints free",
+  "passive_state_writes_after_reset": 0,
+  "solver_calls_during_physics": 0,
+  "source_hashes": {
+    "source_urdf_v5.0.urdf": "1862c3dfc8506fafb28826409ca5801faa9dcbab5730d8fb8669494ca1c167d3",
+    "model_spec.json": "9f6e71b1b79d1b346c0d06c57682c13cb1d40a59c1639240933e47dc21f0b53b",
+    "robot.usda": "e9a6c7184d126fa031b4a3f19298f61cb62d830221595d44163c6b541095d174"
+  },
+  "difference_bounds_rad": [
+    [
+      0.0017926692962646484,
+      0.0017931461334228516
+    ],
+    [
+      1.3295739889144897,
+      1.329579472541809
+    ]
+  ],
+  "max_angle_error_deg": 0.0006906289559935885,
+  "max_loop_gap_m": 1.532729183164334e-06,
+  "cases": [
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 45,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        44.99988581702786,
+        44.99994898352654
+      ],
+      "spatial_angle_deg": [
+        45.10264922249389,
+        45.102711967344334
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -1.6017941236495972,
+        1.600000023841858,
+        1.601804256439209
+      ],
+      "difference_rad": [
+        0.0017940998077392578,
+        0.0018042325973510742
+      ],
+      "max_loop_gap_m": 2.7503680313400215e-07,
+      "kinematic_inner_deg": [
+        45.0,
+        45.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 50,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        49.99978711090485,
+        50.00006344596565
+      ],
+      "spatial_angle_deg": [
+        50.08603796562555,
+        50.086314510544966
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -1.7341840267181396,
+        1.600000023841858,
+        1.734199047088623
+      ],
+      "difference_rad": [
+        0.13418400287628174,
+        0.13419902324676514
+      ],
+      "max_loop_gap_m": 2.2043711649880095e-07,
+      "kinematic_inner_deg": [
+        50.0,
+        50.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 55,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        54.999964497111876,
+        54.99995724142576
+      ],
+      "spatial_angle_deg": [
+        55.07195196905963,
+        55.071946028368224
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -1.8591455221176147,
+        1.600000023841858,
+        1.8591573238372803
+      ],
+      "difference_rad": [
+        0.25914549827575684,
+        0.25915729999542236
+      ],
+      "max_loop_gap_m": 2.1244062036115287e-07,
+      "kinematic_inner_deg": [
+        55.00000000000001,
+        55.00000000000001
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 60,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        59.99994937255946,
+        59.999898659516106
+      ],
+      "spatial_angle_deg": [
+        60.05931464974175,
+        60.05926426687843
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -1.9784594774246216,
+        1.600000023841858,
+        1.9784696102142334
+      ],
+      "difference_rad": [
+        0.37845945358276367,
+        0.3784695863723755
+      ],
+      "max_loop_gap_m": 5.233459655703315e-07,
+      "kinematic_inner_deg": [
+        60.00000000000001,
+        60.00000000000001
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 65,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        65.00036129994763,
+        64.99999356435626
+      ],
+      "spatial_angle_deg": [
+        65.04831272286503,
+        65.04794601553569
+      ],
+      "motor_angles_rad": [
+        -1.6000001430511475,
+        -2.0933949947357178,
+        1.600000023841858,
+        2.093400716781616
+      ],
+      "difference_rad": [
+        0.4933948516845703,
+        0.4934006929397583
+      ],
+      "max_loop_gap_m": 2.8845423600230624e-07,
+      "kinematic_inner_deg": [
+        65.0,
+        65.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 70,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        69.99976632231893,
+        69.99983561958265
+      ],
+      "spatial_angle_deg": [
+        70.03719856243562,
+        70.03726796221665
+      ],
+      "motor_angles_rad": [
+        -1.5999993085861206,
+        -2.2048537731170654,
+        1.599999189376831,
+        2.204868793487549
+      ],
+      "difference_rad": [
+        0.6048544645309448,
+        0.6048696041107178
+      ],
+      "max_loop_gap_m": 1.1463198579243068e-06,
+      "kinematic_inner_deg": [
+        70.00000000000001,
+        70.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 75,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        74.99984608962883,
+        74.99994309293533
+      ],
+      "spatial_angle_deg": [
+        75.02740461158616,
+        75.0275011593545
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.313544273376465,
+        1.600000023841858,
+        2.313556671142578
+      ],
+      "difference_rad": [
+        0.7135442495346069,
+        0.7135566473007202
+      ],
+      "max_loop_gap_m": 1.1818019753946768e-06,
+      "kinematic_inner_deg": [
+        75.0,
+        75.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 80,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        79.99988449714628,
+        79.99995821467392
+      ],
+      "spatial_angle_deg": [
+        80.01801882962756,
+        80.01809359447034
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.4199726581573486,
+        1.600000023841858,
+        2.4199821949005127
+      ],
+      "difference_rad": [
+        0.8199726343154907,
+        0.8199821710586548
+      ],
+      "max_loop_gap_m": 2.957437243061559e-07,
+      "kinematic_inner_deg": [
+        80.00000000000001,
+        80.00000000000001
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 85,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        85.00000442515811,
+        84.99987169818598
+      ],
+      "spatial_angle_deg": [
+        85.00900132236481,
+        85.00887030502076
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.524536609649658,
+        1.600000023841858,
+        2.524545192718506
+      ],
+      "difference_rad": [
+        0.9245365858078003,
+        0.924545168876648
+      ],
+      "max_loop_gap_m": 3.005949406919296e-07,
+      "kinematic_inner_deg": [
+        85.0,
+        85.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 90,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        89.99991331745078,
+        89.99989628676843
+      ],
+      "spatial_angle_deg": [
+        89.99991110670682,
+        89.99989824322124
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.627549886703491,
+        1.600000023841858,
+        2.6275594234466553
+      ],
+      "difference_rad": [
+        1.0275498628616333,
+        1.0275593996047974
+      ],
+      "max_loop_gap_m": 6.619644334298546e-07,
+      "kinematic_inner_deg": [
+        90.0,
+        90.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 95,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        95.00007269244297,
+        94.99976172171374
+      ],
+      "spatial_angle_deg": [
+        94.99107330305857,
+        94.9907624069257
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.729264497756958,
+        1.600000023841858,
+        2.7292749881744385
+      ],
+      "difference_rad": [
+        1.1292644739151,
+        1.1292749643325806
+      ],
+      "max_loop_gap_m": 4.322536760285947e-07,
+      "kinematic_inner_deg": [
+        95.0,
+        95.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 100,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        99.99979416913764,
+        99.99992411570564
+      ],
+      "spatial_angle_deg": [
+        99.98165773355545,
+        99.98178778990079
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.8298838138580322,
+        1.600000023841858,
+        2.8298935890197754
+      ],
+      "difference_rad": [
+        1.2298837900161743,
+        1.2298935651779175
+      ],
+      "max_loop_gap_m": 3.554077995514373e-07,
+      "kinematic_inner_deg": [
+        100.0,
+        100.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 105,
+      "prescribed_left_hip_rad": -1.6,
+      "inner_from_axes_deg": [
+        104.99991343054756,
+        104.99986431368401
+      ],
+      "spatial_angle_deg": [
+        104.97235439877015,
+        104.9723080391444
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.929569721221924,
+        1.600000262260437,
+        2.929579734802246
+      ],
+      "difference_rad": [
+        1.329569697380066,
+        1.329579472541809
+      ],
+      "max_loop_gap_m": 7.310691405768725e-07,
+      "kinematic_inner_deg": [
+        105.0,
+        105.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 45,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        44.99978751521937,
+        45.000260169157805
+      ],
+      "spatial_angle_deg": [
+        45.10254677593824,
+        45.10302332374836
+      ],
+      "motor_angles_rad": [
+        1.3867270354239736e-07,
+        -0.0018037292174994946,
+        1.657587063164101e-07,
+        0.0017954633804038167
+      ],
+      "difference_rad": [
+        0.001803867890203037,
+        0.0017952976216975003
+      ],
+      "max_loop_gap_m": 1.1168185135816005e-06,
+      "kinematic_inner_deg": [
+        45.0,
+        45.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 50,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        49.99996738614461,
+        50.00000779319252
+      ],
+      "spatial_angle_deg": [
+        50.08621905950963,
+        50.08625921759439
+      ],
+      "motor_angles_rad": [
+        -7.849361161049728e-09,
+        -0.1341957002878189,
+        5.5269914867039915e-08,
+        0.13419029116630554
+      ],
+      "difference_rad": [
+        0.13419569243845775,
+        0.13419023589639067
+      ],
+      "max_loop_gap_m": 5.074377416561413e-07,
+      "kinematic_inner_deg": [
+        50.0,
+        50.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 55,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        54.99998934915799,
+        54.99996274187244
+      ],
+      "spatial_angle_deg": [
+        55.07197365606043,
+        55.071949081081954
+      ],
+      "motor_angles_rad": [
+        -3.8171240390738603e-08,
+        -0.2591550648212433,
+        -1.7053571355063468e-07,
+        0.2591497004032135
+      ],
+      "difference_rad": [
+        0.2591550266500029,
+        0.25914987093892705
+      ],
+      "max_loop_gap_m": 4.119355024440776e-07,
+      "kinematic_inner_deg": [
+        54.99999999999999,
+        54.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 60,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        60.00022110342863,
+        59.99977606398463
+      ],
+      "spatial_angle_deg": [
+        60.05958404536318,
+        60.05914193378661
+      ],
+      "motor_angles_rad": [
+        -2.795097842067662e-08,
+        -0.3784671127796173,
+        -2.4258400843635286e-10,
+        0.37846270203590393
+      ],
+      "difference_rad": [
+        0.3784670848286389,
+        0.3784627022784881
+      ],
+      "max_loop_gap_m": 4.631415134985426e-07,
+      "kinematic_inner_deg": [
+        59.999999999999986,
+        59.999999999999986
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 65,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        64.9996982827104,
+        65.00010581364691
+      ],
+      "spatial_angle_deg": [
+        65.04765078210698,
+        65.04805645058104
+      ],
+      "motor_angles_rad": [
+        6.923001194536482e-08,
+        -0.4933961033821106,
+        7.471878671339027e-10,
+        0.49339228868484497
+      ],
+      "difference_rad": [
+        0.49339617261212254,
+        0.4933922879376569
+      ],
+      "max_loop_gap_m": 4.3538307608202197e-07,
+      "kinematic_inner_deg": [
+        64.99999999999999,
+        64.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 70,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        69.99998860794264,
+        69.9999058154439
+      ],
+      "spatial_angle_deg": [
+        70.037426229059,
+        70.03733668376084
+      ],
+      "motor_angles_rad": [
+        -2.0779067710918753e-07,
+        -0.6048626899719238,
+        -1.65360475534726e-07,
+        0.6048603057861328
+      ],
+      "difference_rad": [
+        0.6048624821812467,
+        0.6048604711466083
+      ],
+      "max_loop_gap_m": 4.960064470733946e-07,
+      "kinematic_inner_deg": [
+        69.99999999999999,
+        69.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 75,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        74.9999259295176,
+        74.9997616347154
+      ],
+      "spatial_angle_deg": [
+        75.02748285597131,
+        75.02731928685543
+      ],
+      "motor_angles_rad": [
+        -2.919190649208758e-07,
+        -0.7135487198829651,
+        2.5334236042340308e-08,
+        0.7135438919067383
+      ],
+      "difference_rad": [
+        0.7135484279639002,
+        0.7135438665725022
+      ],
+      "max_loop_gap_m": 8.823223802559239e-07,
+      "kinematic_inner_deg": [
+        74.99999999999997,
+        74.99999999999997
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 80,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        79.999760170566,
+        79.99953956349049
+      ],
+      "spatial_angle_deg": [
+        80.01789350669414,
+        80.01767453464207
+      ],
+      "motor_angles_rad": [
+        1.602834913683182e-07,
+        -0.8199737071990967,
+        -1.6244771927631518e-07,
+        0.8199756741523743
+      ],
+      "difference_rad": [
+        0.819973867482588,
+        0.8199758366000935
+      ],
+      "max_loop_gap_m": 1.3176363178803385e-06,
+      "kinematic_inner_deg": [
+        80.0,
+        80.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 85,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        84.99994230437048,
+        84.99984965610669
+      ],
+      "spatial_angle_deg": [
+        85.00893776493437,
+        85.008851602735
+      ],
+      "motor_angles_rad": [
+        -2.688124425276328e-07,
+        -0.9245420098304749,
+        5.591363105850178e-07,
+        0.9245386719703674
+      ],
+      "difference_rad": [
+        0.9245417410180323,
+        0.9245381128340568
+      ],
+      "max_loop_gap_m": 7.393505425426538e-07,
+      "kinematic_inner_deg": [
+        84.99999999999999,
+        84.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 90,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        89.99976995611159,
+        89.99976308776554
+      ],
+      "spatial_angle_deg": [
+        89.99976743848723,
+        89.99976614893251
+      ],
+      "motor_angles_rad": [
+        -1.0008285045159937e-07,
+        -1.0275547504425049,
+        2.765988824648957e-07,
+        1.0275532007217407
+      ],
+      "difference_rad": [
+        1.0275546503596544,
+        1.0275529241228583
+      ],
+      "max_loop_gap_m": 3.908212806113946e-07,
+      "kinematic_inner_deg": [
+        89.99999999999999,
+        89.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 95,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        94.99996562781708,
+        94.99982339219703
+      ],
+      "spatial_angle_deg": [
+        94.99096350905239,
+        94.9908280235925
+      ],
+      "motor_angles_rad": [
+        1.3331900561297516e-07,
+        -1.1292659044265747,
+        -2.2927143561446428e-07,
+        1.1292665004730225
+      ],
+      "difference_rad": [
+        1.1292660377455803,
+        1.129266729744458
+      ],
+      "max_loop_gap_m": 6.410979079227443e-07,
+      "kinematic_inner_deg": [
+        95.0,
+        95.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 100,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        99.99980615437174,
+        99.9995705236875
+      ],
+      "spatial_angle_deg": [
+        99.98166687257732,
+        99.98143910543764
+      ],
+      "motor_angles_rad": [
+        -1.9582431320941396e-07,
+        -1.229884386062622,
+        2.030780450468228e-07,
+        1.2298847436904907
+      ],
+      "difference_rad": [
+        1.2298841902383089,
+        1.2298845406124457
+      ],
+      "max_loop_gap_m": 9.073580285735869e-07,
+      "kinematic_inner_deg": [
+        99.99999999999999,
+        99.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 105,
+      "prescribed_left_hip_rad": 0.0,
+      "inner_from_axes_deg": [
+        104.99971429527027,
+        104.9997024741668
+      ],
+      "spatial_angle_deg": [
+        104.97215163681103,
+        104.97214709130732
+      ],
+      "motor_angles_rad": [
+        2.3762423495554685e-07,
+        -1.3295676708221436,
+        4.40324186001817e-07,
+        1.3295639753341675
+      ],
+      "difference_rad": [
+        1.3295679084463785,
+        1.3295635350099815
+      ],
+      "max_loop_gap_m": 4.0331160353305924e-07,
+      "kinematic_inner_deg": [
+        105.0,
+        105.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 45,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        45.00060600152726,
+        45.00020629250384
+      ],
+      "spatial_angle_deg": [
+        45.1033655040888,
+        45.102977573154504
+      ],
+      "motor_angles_rad": [
+        2.6000030040740967,
+        2.598210334777832,
+        -2.5999977588653564,
+        -2.5982046127319336
+      ],
+      "difference_rad": [
+        0.0017926692962646484,
+        0.0017931461334228516
+      ],
+      "max_loop_gap_m": 1.469240721011681e-06,
+      "kinematic_inner_deg": [
+        44.999999999999986,
+        44.99999999999998
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 50,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        50.000520899508196,
+        49.99968108467318
+      ],
+      "spatial_angle_deg": [
+        50.08677470761203,
+        50.085936632929304
+      ],
+      "motor_angles_rad": [
+        2.600001811981201,
+        2.465813398361206,
+        -2.59999942779541,
+        -2.4658050537109375
+      ],
+      "difference_rad": [
+        0.13418841361999512,
+        0.13419437408447266
+      ],
+      "max_loop_gap_m": 1.1693982079688949e-06,
+      "kinematic_inner_deg": [
+        49.999999999999986,
+        49.999999999999986
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 55,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        54.999837732593775,
+        54.999960610027216
+      ],
+      "spatial_angle_deg": [
+        55.07183026227954,
+        55.071955639818796
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        2.3408474922180176,
+        -2.5999999046325684,
+        -2.340848922729492
+      ],
+      "difference_rad": [
+        0.2591524124145508,
+        0.25915098190307617
+      ],
+      "max_loop_gap_m": 1.0777161080510221e-06,
+      "kinematic_inner_deg": [
+        54.999999999999986,
+        54.99999999999998
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 60,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        59.99957018228259,
+        59.9998718647464
+      ],
+      "spatial_angle_deg": [
+        60.05894126242114,
+        60.059245891091344
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        2.221536874771118,
+        -2.5999999046325684,
+        -2.221534013748169
+      ],
+      "difference_rad": [
+        0.3784630298614502,
+        0.3784658908843994
+      ],
+      "max_loop_gap_m": 1.5288222454474094e-06,
+      "kinematic_inner_deg": [
+        59.999999999999986,
+        59.999999999999986
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 65,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        65.00008213299584,
+        65.00017731287737
+      ],
+      "spatial_angle_deg": [
+        65.0480343201142,
+        65.0481341141173
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        2.106600046157837,
+        -2.5999999046325684,
+        -2.1066012382507324
+      ],
+      "difference_rad": [
+        0.49339985847473145,
+        0.49339866638183594
+      ],
+      "max_loop_gap_m": 8.506370984796221e-07,
+      "kinematic_inner_deg": [
+        64.99999999999999,
+        64.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 70,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        70.0002937487233,
+        69.99940940123159
+      ],
+      "spatial_angle_deg": [
+        70.03772651284581,
+        70.03684603229269
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.9951364994049072,
+        -2.5999999046325684,
+        -1.9951348304748535
+      ],
+      "difference_rad": [
+        0.6048634052276611,
+        0.6048650741577148
+      ],
+      "max_loop_gap_m": 7.158080765423475e-07,
+      "kinematic_inner_deg": [
+        69.99999999999999,
+        69.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 75,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        75.00013175224426,
+        75.00011819222364
+      ],
+      "spatial_angle_deg": [
+        75.02768908300101,
+        75.02767973334633
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.8864476680755615,
+        -2.5999999046325684,
+        -1.8864505290985107
+      ],
+      "difference_rad": [
+        0.7135522365570068,
+        0.7135493755340576
+      ],
+      "max_loop_gap_m": 1.0046879947645192e-06,
+      "kinematic_inner_deg": [
+        74.99999999999999,
+        74.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 80,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        79.99972836279777,
+        80.000690628956
+      ],
+      "spatial_angle_deg": [
+        80.017864133062,
+        80.01882830825397
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.7800244092941284,
+        -2.5999999046325684,
+        -1.7800217866897583
+      ],
+      "difference_rad": [
+        0.8199754953384399,
+        0.8199781179428101
+      ],
+      "max_loop_gap_m": 1.4443700372049268e-06,
+      "kinematic_inner_deg": [
+        80.0,
+        80.0
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 85,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        84.99987341269123,
+        85.0003608352711
+      ],
+      "spatial_angle_deg": [
+        85.00887131579393,
+        85.00936903773682
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.6754581928253174,
+        -2.5999999046325684,
+        -1.675464153289795
+      ],
+      "difference_rad": [
+        0.924541711807251,
+        0.9245357513427734
+      ],
+      "max_loop_gap_m": 1.3325071215798955e-06,
+      "kinematic_inner_deg": [
+        84.99999999999999,
+        84.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 90,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        89.9998932563516,
+        89.99998628092739
+      ],
+      "spatial_angle_deg": [
+        89.99989182389595,
+        89.9999884537696
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.5724438428878784,
+        -2.5999999046325684,
+        -1.5724462270736694
+      ],
+      "difference_rad": [
+        1.02755606174469,
+        1.027553677558899
+      ],
+      "max_loop_gap_m": 1.2178946736785908e-06,
+      "kinematic_inner_deg": [
+        89.99999999999997,
+        89.99999999999997
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 95,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        94.999986279537,
+        95.00005713751402
+      ],
+      "spatial_angle_deg": [
+        94.99098417007386,
+        94.99106043595253
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.4707282781600952,
+        -2.5999999046325684,
+        -1.470731258392334
+      ],
+      "difference_rad": [
+        1.1292716264724731,
+        1.1292686462402344
+      ],
+      "max_loop_gap_m": 1.2742472981249e-06,
+      "kinematic_inner_deg": [
+        94.99999999999999,
+        94.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 100,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        99.99993487584543,
+        99.99981965413366
+      ],
+      "spatial_angle_deg": [
+        99.9817956938849,
+        99.9816857217609
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.3701097965240479,
+        -2.5999999046325684,
+        -1.3701139688491821
+      ],
+      "difference_rad": [
+        1.2298901081085205,
+        1.2298859357833862
+      ],
+      "max_loop_gap_m": 9.159590461996716e-07,
+      "kinematic_inner_deg": [
+        99.99999999999999,
+        99.99999999999999
+      ]
+    },
+    {
+      "kind": "range_sample",
+      "prescribed_inner_deg": 105,
+      "prescribed_left_hip_rad": 2.6,
+      "inner_from_axes_deg": [
+        105.00014105844177,
+        104.99932080934381
+      ],
+      "spatial_angle_deg": [
+        104.97259700177374,
+        104.97176605481899
+      ],
+      "motor_angles_rad": [
+        2.5999999046325684,
+        1.2704259157180786,
+        -2.5999999046325684,
+        -1.2704333066940308
+      ],
+      "difference_rad": [
+        1.3295739889144897,
+        1.3295665979385376
+      ],
+      "max_loop_gap_m": 1.2169519654381628e-06,
+      "kinematic_inner_deg": [
+        105.00000000000001,
+        105.00000000000001
+      ]
+    },
+    {
+      "kind": "urdf_zero",
+      "inner_from_axes_deg": [
+        44.93450769561943,
+        44.93427495496288
+      ],
+      "spatial_angle_deg": [
+        45.03752634533417,
+        45.037274941975376
+      ],
+      "motor_angles_rad": [
+        -4.665642094892064e-08,
+        -6.013018349904087e-08,
+        -9.75144985204679e-07,
+        4.660552804125473e-06
+      ],
+      "difference_rad": [
+        1.3473762550120227e-08,
+        5.635697789330152e-06
+      ],
+      "max_loop_gap_m": 1.532729183164334e-06,
+      "kinematic_inner_deg": [
+        44.93418086889761,
+        44.93441939283217
+      ]
+    },
+    {
+      "kind": "calibration",
+      "inner_from_axes_deg": [
+        105.02145590044198,
+        105.0209343974319
+      ],
+      "spatial_angle_deg": [
+        104.99386774241202,
+        104.99334023449624
+      ],
+      "motor_angles_rad": [
+        -1.6000001430511475,
+        -2.930000066757202,
+        1.600000023841858,
+        2.930000066757202
+      ],
+      "difference_rad": [
+        1.3299999237060547,
+        1.3300000429153442
+      ],
+      "max_loop_gap_m": 6.221095744019614e-07,
+      "kinematic_inner_deg": [
+        105.02167086770135,
+        105.02116569342986
+      ]
+    },
+    {
+      "kind": "reported_stop",
+      "inner_from_axes_deg": [
+        49.81700826691408,
+        25.106716136137923
+      ],
+      "spatial_angle_deg": [
+        49.90381158183572,
+        25.325333568845224
+      ],
+      "motor_angles_rad": [
+        0.05288340151309967,
+        -0.07662153244018555,
+        0.2045525759458542,
+        -0.4715881049633026
+      ],
+      "difference_rad": [
+        0.12950493395328522,
+        -0.6761406809091568
+      ],
+      "max_loop_gap_m": 1.0443303151533423e-06,
+      "kinematic_inner_deg": [
+        49.817338981236595,
+        25.106371879224593
+      ]
+    }
+  ],
+  "passed": true
+}

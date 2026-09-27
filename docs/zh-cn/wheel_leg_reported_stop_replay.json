@@ -1,0 +1,88 @@
+{
+  "method": "Offline production driver/controller/enable replay; no real CAN or physical movement",
+  "cases": [
+    "URDF zero",
+    "DM calibration zero"
+  ],
+  "input_deg": [
+    [
+      3.03,
+      -4.39,
+      11.72,
+      -27.02
+    ],
+    [
+      3.03,
+      -4.39,
+      11.72,
+      -27.02
+    ]
+  ],
+  "target_rad": [
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      -1.6,
+      -2.93,
+      1.6,
+      2.93
+    ]
+  ],
+  "first_fault": {
+    "time_s": 1.0,
+    "environment": 0,
+    "reason": "right pair outside configured opening range: d=-0.676180 allowed=[-0.030000,1.360000]",
+    "raw_feedback_hex": [
+      "01af697ff7ff282d",
+      "01a31e7ff7ff282d",
+      "028e497ff7ff282d",
+      "02a2d47ff7ff282d"
+    ],
+    "decoded_angles": [
+      0.05302585040076657,
+      -0.07647060187664145,
+      0.20475318532082065,
+      -0.47142671854733953
+    ]
+  },
+  "final_active": [
+    false,
+    false
+  ],
+  "final_healthy": [
+    false,
+    false
+  ],
+  "command": [
+    [
+      -0.0,
+      -0.0,
+      -0.0,
+      -0.0
+    ],
+    [
+      -0.0,
+      -0.0,
+      -0.0,
+      -0.0
+    ]
+  ],
+  "status": [
+    [
+      1,
+      1,
+      1,
+      1
+    ],
+    [
+      1,
+      1,
+      1,
+      1
+    ]
+  ]
+}

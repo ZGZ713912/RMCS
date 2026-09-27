@@ -137,6 +137,7 @@ public:
         torque_max_ = config.torque_max;
 
         fault_code_ = 0;
+        decoded_feedback_ns_ = 0;
         last_feedback_ns_.store(0, std::memory_order_relaxed);
     }
 
@@ -175,11 +176,16 @@ public:
     }
 
     void update_status() {
-        if (!feedback_fresh()) {
+        // Load the published time before the packet: it is a conservative lower
+        // bound for this decoded sample, never a newer arrival paired with old q.
+        const auto received_ns = last_feedback_ns_.load(std::memory_order_acquire);
+        if (!feedback_fresh_at_(received_ns)) {
             *feedback_valid_output_ = false;
             return;
         }
         auto packet = can_data_.load(std::memory_order_relaxed);
+        decoded_packet_ = packet;
+        decoded_feedback_ns_ = received_ns;
         const auto bytes = packet.as_bytes();
 
         const auto d0 = static_cast<std::uint8_t>(bytes[0]);
@@ -198,13 +204,14 @@ public:
             | static_cast<std::uint8_t>(bytes[5]));
 
         const double sign = reversed_ ? -1.0 : 1.0;
-        const double raw_angle = uint_to_float(pos_u, -position_max_, position_max_, 16);
+        position_code_ = pos_u;
+        raw_angle_ = uint_to_float(pos_u, -position_max_, position_max_, 16);
         const double raw_velocity = uint_to_float(vel_u, -velocity_max_, velocity_max_, 12);
         const double raw_torque = uint_to_float(tff_u, -torque_max_, torque_max_, 12);
 
         // A phase, not a turn counter. Motor raw=0 and raw=2*pi describe the
         // same calibrated pose. The pair controller resolves the leg opening.
-        angle_ = std::remainder(sign * (raw_angle - angle_offset_), 2.0 * std::numbers::pi);
+        angle_ = std::remainder(sign * (raw_angle_ - angle_offset_), 2.0 * std::numbers::pi);
         velocity_ = sign * raw_velocity;
         torque_ = sign * raw_torque;
 
@@ -236,6 +243,15 @@ public:
     /// 速度命令帧 ID == 电机 CAN ID + 0x200
     std::uint32_t velocity_send_id() const noexcept { return 0x200u + id_; }
     std::uint32_t feedback_id() const noexcept { return feedback_id_; }
+    bool reversed() const { return reversed_; }
+    double angle_offset() const { return angle_offset_; }
+    double position_max() const { return position_max_; }
+    double velocity_max() const { return velocity_max_; }
+    double torque_max() const { return torque_max_; }
+    std::uint16_t position_code() const { return position_code_; }
+    double raw_angle() const { return raw_angle_; }
+    double raw_phase() const { return std::remainder(raw_angle_, 2.0 * std::numbers::pi); }
+    CanPacket8 feedback_packet() const { return decoded_packet_; }
     double angle() const { return angle_; }
     double velocity() const { return velocity_; }
     double torque() const { return torque_; }
@@ -246,10 +262,10 @@ public:
     bool feedback_ready() const { return feedback_fresh() && fault_code_ == 0; }
     std::chrono::steady_clock::time_point last_feedback_time() const {
         return std::chrono::steady_clock::time_point{
-            std::chrono::nanoseconds{last_feedback_ns_.load(std::memory_order_acquire)}};
+            std::chrono::nanoseconds{decoded_feedback_ns_}};
     }
     double feedback_age_ms() const {
-        const auto last = last_feedback_ns_.load(std::memory_order_acquire);
+        const auto last = decoded_feedback_ns_;
         return last == 0 ? -1.0 : static_cast<double>(steady_now_ns_() - last) / 1e6;
     }
     void reset_feedback_tracking() { last_feedback_ns_.store(0, std::memory_order_release); }
@@ -288,7 +304,11 @@ private:
     }
 
     bool feedback_fresh() const {
-        const auto last = last_feedback_ns_.load(std::memory_order_acquire);
+        return last_feedback_ns_.load(std::memory_order_acquire) != 0
+               && feedback_fresh_at_(decoded_feedback_ns_);
+    }
+
+    static bool feedback_fresh_at_(std::int64_t last) {
         const auto age = steady_now_ns_() - last;
         return last != 0 && age >= 0 && age <= 100'000'000;
     }
@@ -304,6 +324,10 @@ private:
 
     std::atomic<CanPacket8> can_data_{CanPacket8{0}};
     std::atomic<std::int64_t> last_feedback_ns_{0};
+    CanPacket8 decoded_packet_{0};
+    std::int64_t decoded_feedback_ns_ = 0;
+    std::uint16_t position_code_ = 0;
+    double raw_angle_ = 0.0;
 
     double angle_ = 0.0;
     double velocity_ = 0.0;

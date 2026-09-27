@@ -47,8 +47,10 @@ public:
             get_parameter_or<double>("min_motor_difference", Geometry::kDefaultMinDifference);
         config_.max_difference =
             get_parameter_or<double>("max_motor_difference", Geometry::kDefaultMaxDifference);
-        target_margin_ = get_parameter_or<double>("motor_difference_margin", 0.04);
+        target_margin_ = get_parameter_or<double>("motor_difference_margin", 0.0);
         feedback_tolerance_ = get_parameter_or<double>("motor_difference_tolerance", 0.03);
+        upper_feedback_tolerance_ =
+            get_parameter_or<double>("motor_difference_upper_tolerance", feedback_tolerance_);
         max_feedback_speed_ = get_parameter_or<double>("max_feedback_speed", 45.0);
         max_feedback_jump_ = get_parameter_or<double>("max_feedback_jump", 0.5);
         if (!std::isfinite(config_.angle_kp) || config_.angle_kp <= 0.0
@@ -58,15 +60,31 @@ public:
             || !std::isfinite(target_margin_) || target_margin_ < 0.0
             || config_.min_difference + 2.0 * target_margin_ >= config_.max_difference
             || !std::isfinite(feedback_tolerance_) || feedback_tolerance_ < 0.0
+            || !std::isfinite(upper_feedback_tolerance_) || upper_feedback_tolerance_ < 0.0
             || config_.min_difference - feedback_tolerance_ <= -std::numbers::pi
-            || config_.max_difference + feedback_tolerance_ >= std::numbers::pi
+            || config_.max_difference + upper_feedback_tolerance_ >= std::numbers::pi
             || !std::isfinite(max_feedback_speed_) || max_feedback_speed_ <= 0.0
             || !std::isfinite(max_feedback_jump_) || max_feedback_jump_ <= 0.0
             || max_feedback_jump_ >= std::numbers::pi)
             throw std::invalid_argument("WheelLegJointVelocityController: invalid parameter");
     }
 
-    void update() override { update_at(Clock::now()); }
+    void update() override {
+        update_at(Clock::now());
+        if (!joint_enable_.ready() || !*joint_enable_)
+            return;
+        constexpr double kRadToDeg = 180.0 / std::numbers::pi;
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "[joint pair] target deg LH,LK,RH,RK=[%.2f,%.2f,%.2f,%.2f] "
+            "active=%d healthy=%d reason=%s",
+            target_[0].ready() ? *target_[0] * kRadToDeg : NAN,
+            target_[1].ready() ? *target_[1] * kRadToDeg : NAN,
+            target_[2].ready() ? *target_[2] * kRadToDeg : NAN,
+            target_[3].ready() ? *target_[3] * kRadToDeg : NAN,
+            joint_control_active_.ready() && *joint_control_active_, *healthy_,
+            fault_reason_->empty() ? "none" : fault_reason_->c_str());
+    }
 
     // Use the same component in an offline, deterministic physics simulation.
     // The runtime entry above always supplies the real steady clock.
@@ -102,30 +120,37 @@ public:
         }
         std::array<WheelLegPairPose, 2> measured;
         std::array<WheelLegPairPose, 2> desired;
+        std::string opening_faults;
         for (std::size_t pair = 0; pair < 2; ++pair) {
             const auto side = pair == 0 ? Geometry::Side::kLeft : Geometry::Side::kRight;
             const auto first = 2 * pair;
             const auto pose = Geometry::feedback(
                 side, *position_[first], *position_[first + 1], config_.min_difference,
-                config_.max_difference, feedback_tolerance_);
+                config_.max_difference, feedback_tolerance_, upper_feedback_tolerance_);
             if (!pose) {
-                unavailable_(
-                    std::string{pair == 0 ? "left" : "right"}
-                    + " pair outside V5 assembly branch, d="
+                if (!opening_faults.empty())
+                    opening_faults += "; ";
+                opening_faults += std::string{pair == 0 ? "left" : "right"}
+                    + " pair outside configured opening range: d="
                     + std::to_string(
-                        Geometry::decode(side, *position_[first], *position_[first + 1])
-                            .difference));
-                return;
+                        Geometry::decode(side, *position_[first], *position_[first + 1]).difference)
+                    + " allowed=[" + std::to_string(config_.min_difference - feedback_tolerance_)
+                    + "," + std::to_string(config_.max_difference + upper_feedback_tolerance_) + "]";
+                continue;
             }
             measured[pair] = *pose;
             desired[pair] = Geometry::target(
                 side, *target_[first], *target_[first + 1], config_.min_difference,
                 config_.max_difference, target_margin_);
         }
+        if (!opening_faults.empty()) {
+            unavailable_(opening_faults);
+            return;
+        }
         if (!feedback_initialized_)
             RCLCPP_INFO(
                 get_logger(),
-                "[joint pair] initial inner angle: left=%.2f right=%.2f deg; "
+                "[joint pair] estimated initial inner angle: left=%.2f right=%.2f deg; "
                 "instantaneous phase feedback, no turn accumulation",
                 Geometry::inner_angle_degrees(measured[0].difference),
                 Geometry::inner_angle_degrees(measured[1].difference));
@@ -199,8 +224,9 @@ private:
     OutputInterface<std::string> fault_reason_;
 
     WheelLegPairVelocityConfig config_;
-    double target_margin_ = 0.04;
+    double target_margin_ = 0.0;
     double feedback_tolerance_ = 0.03;
+    double upper_feedback_tolerance_ = 0.03;
     double max_feedback_speed_ = 45.0;
     double max_feedback_jump_ = 0.5;
     std::array<WheelLegJointPair, 2> previous_command_{};

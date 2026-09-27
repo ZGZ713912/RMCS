@@ -1,7 +1,9 @@
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <memory>
 #include <numbers>
 #include <ranges>
@@ -24,6 +26,7 @@
 #include "hardware/device/board_clock_lifter.hpp"
 #include "hardware/device/can_packet.hpp"
 #include "hardware/device/dji_motor.hpp"
+#include "hardware/device/dm_joint_calibration.hpp"
 #include "hardware/device/dm_joint_enable_sequence.hpp"
 #include "hardware/device/dm_motor.hpp"
 #include "hardware/device/dr16.hpp"
@@ -108,7 +111,7 @@ public:
         send_joint_system_commands_(startup_builder, JointSystemCommand::kDisable);
 
         dm_calibrate_subscription_ = create_subscription<std_msgs::msg::Int32>(
-            "/wheel_leg/calibrate", rclcpp::QoS{0},
+            "/wheel_leg/calibrate", rclcpp::QoS{1},
             [this](std_msgs::msg::Int32::UniquePtr&&) { calibrate_subscription_callback_(); });
 
         using Srv = std_srvs::srv::Trigger;
@@ -144,9 +147,14 @@ public:
             hip_joint_motors_[1].angle() * kRadToDeg, knee_joint_motors_[1].angle() * kRadToDeg);
         RCLCPP_INFO_THROTTLE(
             logger_, *get_clock(), 100,
-            "[wheel_leg DM v_des rad/s] L_hip=%.3f L_knee=%.3f R_hip=%.3f R_knee=%.3f",
+            "[wheel_leg DM v_des rad/s] L_hip=%.3f L_knee=%.3f R_hip=%.3f R_knee=%.3f "
+            "active=%d phase=%s controller=%d reason=%s calibration=%s",
             hip_joint_motors_[0].control_velocity(), knee_joint_motors_[0].control_velocity(),
-            hip_joint_motors_[1].control_velocity(), knee_joint_motors_[1].control_velocity());
+            hip_joint_motors_[1].control_velocity(), knee_joint_motors_[1].control_velocity(),
+            joint_control_active_, joint_enable_sequence_.phase_name(), joint_controller_healthy_,
+            joint_controller_fault_reason_.empty() ? "none"
+                                                   : joint_controller_fault_reason_.c_str(),
+            joint_calibration_.phase_name());
     }
 
     void command_update(bool controller_healthy, const std::string& controller_fault_reason) {
@@ -157,12 +165,42 @@ public:
             &hip_joint_motors_[0], &knee_joint_motors_[0], &hip_joint_motors_[1],
             &knee_joint_motors_[1]};
         std::array<device::DmJointEnableSequence::Feedback, 4> feedback;
-        for (std::size_t i = 0; i < joints.size(); ++i)
+        std::array<device::DmJointCalibration::Feedback, 4> calibration_feedback;
+        for (std::size_t i = 0; i < joints.size(); ++i) {
             feedback[i] = {
                 joints[i]->feedback_ready(), joints[i]->status_code(),
                 joints[i]->last_feedback_time()};
+            calibration_feedback[i] = {
+                joints[i]->feedback_ready(), joints[i]->status_code(), joints[i]->raw_phase(),
+                joints[i]->velocity(), joints[i]->last_feedback_time()};
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (calibration_requested_.exchange(false, std::memory_order_acq_rel)) {
+            if (joint_calibration_.request(joints_enabled_, calibration_feedback, now))
+                RCLCPP_INFO(logger_, "[joint calibration] request accepted; waiting for FE/readback");
+            else
+                RCLCPP_ERROR(
+                    logger_, "[joint calibration] request rejected: require disarm and four fresh "
+                             "stationary status=0 motors, with no calibration already pending");
+        }
+        const auto previous_calibration = joint_calibration_.phase();
+        const auto zero_mask = joint_calibration_.update(calibration_feedback, now);
+        if (joint_calibration_.phase() != previous_calibration) {
+            if (joint_calibration_.phase() == device::DmJointCalibration::Phase::kConfirmed)
+                RCLCPP_INFO(
+                    logger_, "[joint calibration] four fresh raw phases near zero confirmed; "
+                             "physical reference and power-cycle persistence are not verified");
+            else if (joint_calibration_.phase() == device::DmJointCalibration::Phase::kFailed)
+                RCLCPP_ERROR(
+                    logger_, "[joint calibration] verification failed: FE_sent_mask=0x%x "
+                             "zero_feedback_mask=0x%x (LH,LK,RH,RK bits 0..3); control blocked "
+                             "until an explicit calibration succeeds; inspect raw feedback",
+                    static_cast<unsigned>(joint_calibration_.sent_mask()),
+                    static_cast<unsigned>(joint_calibration_.zero_mask()));
+        }
         const auto step = joint_enable_sequence_.update(
-            joints_enabled_, controller_healthy, feedback, std::chrono::steady_clock::now());
+            joints_enabled_ && !joint_calibration_.blocks_control(), controller_healthy, feedback,
+            now);
         joint_control_active_ = step.control_active;
         auto builder = board_->start_transmit();
 
@@ -185,7 +223,19 @@ public:
         // Clear/enable one motor per CAN bus in staggered USB transfers.
         // System frames go first: the other motor's VEL response must not
         // precede an FC waiting in a non-retrying board CAN TX FIFO.
-        if (step.system != JointSystemCommand::kNone)
+        if (zero_mask != 0) {
+            for (std::size_t i = 0; i < joints.size(); ++i) {
+                if (!(zero_mask & (1u << i)))
+                    continue;
+                const auto& motor = *joints[i];
+                builder.can_transmit(
+                    i % 2 == 0 ? Spec::kCans.kCan1 : Spec::kCans.kCan2,
+                    {.can_id = motor.send_id(), .can_data = motor.set_zero_command().as_bytes()});
+            }
+            RCLCPP_INFO(
+                logger_, "[joint calibration] FE sent mask=0x%x; zero feedback not yet confirmed",
+                static_cast<unsigned>(zero_mask));
+        } else if (step.system != JointSystemCommand::kNone)
             send_joint_system_commands_(builder, step.system, step.system_mask);
         // Startup supplies zero for 50 ms before the first FC and immediately
         // after FC as well. Keep transmitting zero during disarm/failure.
@@ -204,6 +254,7 @@ public:
         if (joints_enabled_
             && joint_enable_sequence_.phase() == device::DmJointEnableSequence::Phase::kFailed)
             note_joint_unavailable_();
+        update_status_snapshot_(now);
     }
 
     void set_joints_enabled(bool enabled) {
@@ -246,31 +297,57 @@ private:
     }
 
     void calibrate_subscription_callback_() {
-        if (joints_enabled_) {
-            RCLCPP_ERROR(logger_, "[joint calibration] disable DM joints before setting zero");
-            return;
-        }
-        const auto set_zero =
-            [this](auto& builder, const Spec::Can& can, device::DmMotor& motor, const char* name) {
-                builder.can_transmit(
-                    can,
-                    {.can_id = motor.send_id(), .can_data = motor.set_zero_command().as_bytes()});
-                motor.reset_feedback_tracking();
-                RCLCPP_INFO(
-                    logger_, "[joint calibration] set zero for %s (can_id %u)", name,
-                    static_cast<unsigned>(motor.send_id()));
-            };
-
-        auto builder = board_->start_transmit();
-        set_zero(builder, Spec::kCans.kCan1, hip_joint_motors_[0], "left_hip_joint");
-        set_zero(builder, Spec::kCans.kCan1, hip_joint_motors_[1], "right_hip_joint");
-        set_zero(builder, Spec::kCans.kCan2, knee_joint_motors_[0], "left_knee_joint");
-        set_zero(builder, Spec::kCans.kCan2, knee_joint_motors_[1], "right_knee_joint");
+        // ROS callbacks and component updates run on different threads. Only
+        // the command update owns motor writes and calibration state.
+        calibration_requested_.store(true, std::memory_order_release);
+        RCLCPP_INFO(logger_, "[joint calibration] explicit request queued for command update");
     }
 
     void status_service_callback_(
         const std::shared_ptr<std_srvs::srv::Trigger::Response>& response) {
+        const auto snapshot = status_snapshot_.load(std::memory_order_acquire);
+        if (!snapshot) {
+            response->success = false;
+            response->message = "WheelLegInfantryRL: waiting for first component update";
+            return;
+        }
         response->success = true;
+        const auto age = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - snapshot->captured_at).count();
+        response->message = "Snapshot_age_ms=" + std::to_string(age) + '\n' + snapshot->text;
+    }
+
+    static std::string joint_feedback_text_(std::size_t i, const device::DmMotor& motor) {
+        constexpr auto kNames = std::array{"LH", "LK", "RH", "RK"};
+        constexpr double kRadToDeg = 180.0 / std::numbers::pi;
+        std::ostringstream text;
+        text << std::fixed << std::setprecision(6) << kNames[i]
+             << " CAN" << (i % 2 == 0 ? 1 : 2) << " id=" << motor.send_id()
+             << " mst_id=" << motor.feedback_id() << " status=" << motor.status_code()
+             << " fault=" << motor.fault_code() << " fresh=" << motor.feedback_ready()
+             << " age_ms=" << motor.feedback_age_ms() << " frame=" << std::hex
+             << std::setfill('0');
+        auto packet = motor.feedback_packet();
+        for (const auto byte : packet.as_bytes())
+            text << std::setw(2) << std::to_integer<unsigned>(byte) << ' ';
+        text << "POS16=0x" << std::setw(4) << motor.position_code() << std::dec
+             << std::setfill(' ') << " raw_rad=" << motor.raw_angle()
+             << " raw_phase_deg=" << motor.raw_phase() * kRadToDeg
+             << " offset_rad=" << motor.angle_offset() << " reversed=" << motor.reversed()
+             << " q_deg=" << motor.angle() * kRadToDeg << " vel=" << motor.velocity()
+             << " torque=" << motor.torque()
+             << " P_MAX=" << motor.position_max() << " V_MAX=" << motor.velocity_max()
+             << " T_MAX=" << motor.torque_max();
+        return text.str();
+    }
+
+    void update_status_snapshot_(std::chrono::steady_clock::time_point now) {
+        if (now < next_status_snapshot_)
+            return;
+        next_status_snapshot_ = now + std::chrono::milliseconds{250};
+        const bool log_feedback = now >= next_feedback_log_;
+        if (log_feedback)
+            next_feedback_log_ = now + std::chrono::seconds{1};
 
         auto text = std::ostringstream{};
         text << "WheelLegInfantryRL status:\n";
@@ -289,20 +366,16 @@ private:
         for (const auto attempts : joint_enable_sequence_.enable_attempts())
             text << attempts << ',';
         text << '\n';
-        text << "  DM joints (all zeroed via /wheel_leg/calibrate):\n";
-        constexpr auto kNames =
-            std::array{"left_hip_joint", "right_hip_joint", "left_knee_joint", "right_knee_joint"};
+        text << "  DM joints: q=wrap(sign*(raw-offset)), sign=-1 when reversed; "
+                "raw=0 should give q=offset for this vehicle.\n";
         const std::array<device::DmMotor*, 4> joints{
-            &hip_joint_motors_[0], &hip_joint_motors_[1], &knee_joint_motors_[0],
+            &hip_joint_motors_[0], &knee_joint_motors_[0], &hip_joint_motors_[1],
             &knee_joint_motors_[1]};
         for (std::size_t i = 0; i < joints.size(); ++i) {
-            const auto& motor = *joints[i];
-            text << "    " << kNames[i] << ": can_id=" << static_cast<unsigned>(motor.send_id())
-                 << " angle=" << motor.angle() << " rad vel=" << motor.velocity()
-                 << " rad/s torque=" << motor.torque() << " Nm fault=0x" << std::hex
-                 << motor.fault_code() << std::dec << " status=" << motor.status_code()
-                 << " feedback_ready=" << motor.feedback_ready()
-                 << " feedback_age_ms=" << motor.feedback_age_ms() << '\n';
+            const auto diagnostic = joint_feedback_text_(i, *joints[i]);
+            text << "    " << diagnostic << '\n';
+            if (log_feedback)
+                RCLCPP_INFO(logger_, "[wheel_leg DM feedback] %s", diagnostic.c_str());
         }
         text << "  Wheels (M3508):\n";
         for (std::size_t i = 0; i < 2; ++i) {
@@ -310,10 +383,16 @@ private:
                  << " rad vel=" << chassis_wheel_motors_[i].velocity()
                  << " rad/s torque=" << chassis_wheel_motors_[i].torque() << " Nm\n";
         }
-        text << "  Zero calibration:\n"
+        text << "  RMCS zero calibration: " << joint_calibration_.phase_name()
+             << " blocks_control=" << joint_calibration_.blocks_control()
+             << " FE_sent_mask=" << static_cast<unsigned>(joint_calibration_.sent_mask())
+             << " zero_feedback_mask=" << static_cast<unsigned>(joint_calibration_.zero_mask())
+             << " (LH,LK,RH,RK bits 0..3; result at calibration time, not current pose)\n"
+                "    No automatic zero writes; physical reference must be set by the operator.\n"
                 "    ros2 topic pub /wheel_leg/calibrate std_msgs/msg/Int32 '{data: 0}' --once\n";
-
-        response->message = text.str();
+        status_snapshot_.store(
+            std::make_shared<const StatusSnapshot>(StatusSnapshot{now, text.str()}),
+            std::memory_order_release);
     }
 
     device::CanPacket8 joint_command_(const device::DmMotor& motor, bool zero_velocity) const {
@@ -491,7 +570,17 @@ private:
     std::string joint_fault_reason_;
     std::string joint_controller_fault_reason_;
     device::DmJointEnableSequence joint_enable_sequence_;
+    device::DmJointCalibration joint_calibration_;
+    std::atomic<bool> calibration_requested_{false};
     bool joint_control_ever_active_ = false;
+
+    struct StatusSnapshot {
+        std::chrono::steady_clock::time_point captured_at;
+        std::string text;
+    };
+    std::atomic<std::shared_ptr<const StatusSnapshot>> status_snapshot_;
+    std::chrono::steady_clock::time_point next_status_snapshot_{};
+    std::chrono::steady_clock::time_point next_feedback_log_{};
 
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr dm_calibrate_subscription_;
 

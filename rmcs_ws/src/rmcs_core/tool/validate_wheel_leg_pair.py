@@ -40,7 +40,9 @@ config = yaml.safe_load((core.parent / "rmcs_bringup/config/wheel-leg-infantry-r
 p = config["wheel_leg_joint_velocity_controller"]["ros__parameters"]
 parameters = np.array([p[n] for n in ("angle_kp", "max_joint_velocity", "max_joint_acceleration",
                                      "min_motor_difference", "max_motor_difference",
-                                     "motor_difference_margin", "motor_difference_tolerance")], dtype=np.float64)
+                                     "motor_difference_margin", "motor_difference_tolerance")]
+                      + [p.get("motor_difference_upper_tolerance", p["motor_difference_tolerance"])],
+                      dtype=np.float64)
 hardware = config["wheel_leg_infantry_rl"]["ros__parameters"]
 joint_keys = ["left_hip_joint", "left_knee_joint", "right_hip_joint", "right_knee_joint"]
 offsets = np.array([hardware[n + "_angle_offset"] for n in joint_keys])
@@ -52,25 +54,36 @@ from build_v5_closedchain import closure_error, solve_pose
 from v5_mechanism import fk
 
 active = ["L_joint1", "LL_joint1", "R_joint1", "RR_joint1"]
-zero_inner = math.pi - 2.3573
+zero_frames = fk(spec, {})
+zero_inner = []
+for side in ("L", "R"):
+    hip, knee, wheel = [zero_frames[side + "_link" + str(n)][:3, 3] for n in (1, 2, 3)]
+    knee_axis = next(j["axis"] for j in spec["joints"] if j["child"] == side + "_link2")
+    normal = zero_frames[side + "_link2"][:3, :3] @ knee_axis
+    thigh, shank = hip - knee, wheel - knee
+    thigh -= normal * (thigh @ normal)
+    shank -= normal * (shank @ normal)
+    zero_inner.append(math.acos(np.clip(thigh @ shank / np.linalg.norm(thigh)
+                                      / np.linalg.norm(shank), -1., 1.)))
 
 def closed(inner, hip):
-    q2 = math.radians(inner) - zero_inner
+    q2 = math.radians(inner) - zero_inner[0]
     seed = dict(spec["nominal_joint_pos"])
     for name in ("L_joint1", "LL_joint1"):
         seed[name] += hip - .42
     for name in ("R_joint1", "RR_joint1"):
         seed[name] -= hip - .42
     return solve_pose(spec, {"L_joint1": hip, "L_joint2": q2, "L_joint3": 0.,
-                             "R_joint1": -hip, "R_jonit2": -q2, "R_joint3": 0.}, seed)
+                             "R_joint1": -hip, "R_jonit2": zero_inner[1] - math.radians(inner), "R_joint3": 0.}, seed)
 
 qcal = solve_pose(spec, dict(zip(active, offsets)) | {"L_joint3": 0., "R_joint3": 0.}, closed(105., -1.6))
+qzero = solve_pose(spec, dict.fromkeys(active, 0.) | {"L_joint3": 0., "R_joint3": 0.}, closed(45., 0.))
 frames = fk(spec, qcal)
 thigh = frames["L_link2"][:3, 3] - frames["L_link1"][:3, 3]
-calibration = {"offsets": offsets.tolist(), "inner_angle_deg": [math.degrees(zero_inner + qcal["L_joint2"]),
-               math.degrees(zero_inner - qcal["R_jonit2"])], "left_thigh_direction": (thigh / np.linalg.norm(thigh)).tolist()}
+calibration = {"offsets": offsets.tolist(), "inner_angle_deg": [math.degrees(zero_inner[0] + qcal["L_joint2"]),
+               math.degrees(zero_inner[1] - qcal["R_jonit2"])], "left_thigh_direction": (thigh / np.linalg.norm(thigh)).tolist()}
 geometry = []
-for inner in (30., 45., 70., 90., 100., 105., 110., 115., 120.):
+for inner in (45., 50., 60., 70., 80., 90., 100., 105.):
     q = closed(inner, .42)
     geometry.append({"inner_deg": inner, "left_difference": q["L_joint1"] - q["LL_joint1"],
                      "right_difference": q["RR_joint1"] - q["R_joint1"],
@@ -80,7 +93,7 @@ for inner in (30., 45., 70., 90., 100., 105., 110., 115., 120.):
 rng = np.random.default_rng(20260926)
 headings = rng.uniform(-math.pi, math.pi, args.envs)
 headings[:min(4, args.envs)] = [-1.6 - .05, -1.6 + .05, -math.pi + .01, math.pi - .01][:min(4, args.envs)]
-initial_angles = np.resize(np.array([100., 105., 110., 120.]), args.envs)
+initial_angles = np.resize(np.array([45., 65., 90., 105.]), args.envs)
 if args.direction_comparison:
     headings = np.array([-2.1, -2.1, -1.6, -1.6])
     initial_angles = np.full(4, 105.)
@@ -88,7 +101,7 @@ elif args.dm_feedback:
     if args.envs != 16:
         raise ValueError("DM feedback suite requires 16 paired unsigned/signed cases")
     headings = np.repeat(np.array([-1.6, -2.1, -1.65, -1.55, -math.pi + .01, math.pi - .01, -2.9, 2.6]), 2)
-    initial_angles = np.repeat(np.array([105., 105., 100., 110., 105., 105., 100., 110.]), 2)
+    initial_angles = np.repeat(np.array([105., 105., 45., 65., 105., 105., 70., 90.]), 2)
 initial = [closed(float(angle), float(hip)) for angle, hip in zip(initial_angles, headings)]
 if args.direction_comparison:
     initial[2:] = [dict(qcal), dict(qcal)]
@@ -149,9 +162,8 @@ with tempfile.TemporaryDirectory(prefix="rmcs-v5-servo-") as temp:
         assert len(loops) == 6 * args.envs
         for prim in sim.stage.Traverse():
             if prim.GetName() in ("L_joint2", "R_jonit2"):
-                limits = [30. - math.degrees(zero_inner), 120. - math.degrees(zero_inner)]
-                if prim.GetName() == "R_jonit2":
-                    limits = [-limits[1], -limits[0]]
+                name = prim.GetName()
+                limits = sorted([math.degrees(qzero[name]), math.degrees(qcal[name])])
                 joint = UsdPhysics.RevoluteJoint(prim)
                 joint.GetLowerLimitAttr().Set(limits[0])
                 joint.GetUpperLimitAttr().Set(limits[1])
@@ -281,8 +293,8 @@ with tempfile.TemporaryDirectory(prefix="rmcs-v5-servo-") as temp:
                 robot.update(dt)
                 simulation_time += dt
                 max_torque = max(max_torque, float(torque.abs().max()))
-                inner = torch.stack((q[:, names.index("L_joint2")] + zero_inner,
-                                     zero_inner - q[:, names.index("R_jonit2")]), dim=1) * (180. / math.pi)
+                inner = torch.stack((q[:, names.index("L_joint2")] + zero_inner[0],
+                                     zero_inner[1] - q[:, names.index("R_jonit2")]), dim=1) * (180. / math.pi)
                 inner_min = min(inner_min, float(inner.min()))
                 inner_max = max(inner_max, float(inner.max()))
                 if tick % 50 == 0:
@@ -319,14 +331,14 @@ with tempfile.TemporaryDirectory(prefix="rmcs-v5-servo-") as temp:
                   "physx_external_forces_every_iteration": True,
                   "fixture": "fixed base, 19 bodies and 6 loop constraints per robot, gravity enabled, alternating gas springs on/off",
                   "motor_model_assumptions": {"velocity_kp": 10., "velocity_ki": 50., "torque_limit_nm": 40., "armature_kg_m2": .02},
-                  "temporary_model_edits": {"inner_limits_deg": [30, 120], "spring_lower_limit_m": -.012},
+                  "temporary_model_edits": {"knee_limits_from": "closed-chain URDF-zero and retained DM-zero offsets", "inner_limits_deg_approx": [44.934, 105.022], "spring_lower_limit_m": -.012},
                   "passive_pose_writes_after_reset": 0, "kinematic_solver_calls_during_physics": 0,
                   "invalid_feedback_steps": invalid_feedback_steps, "max_loop_gap_m": max_gap,
                   "inner_angle_range_deg": [inner_min, inner_max], "max_command_rad_s": max_command,
                   "max_command_step_rad_s": max_command_step, "max_motor_torque_nm": max_torque,
                   "calibration_zero_crossings": seam_crossings.tolist(), "phases": phases}
         report["passed"] = (invalid_feedback_steps == 0 and max_gap < .002
-                            and inner_min > 29.5 and inner_max < 120.5
+                            and inner_min > 44.7 and inner_max < 105.3
                             and max_command <= parameters[1] + 1e-6
                             and all(v["max_motor_error_rad"] < .04 for v in phases if v["requested_enabled"])
                             and (dm_bridge is not None or bool((seam_crossings > 0).all())))
@@ -376,7 +388,7 @@ with tempfile.TemporaryDirectory(prefix="rmcs-v5-servo-") as temp:
                 }
                 report["passed"] = (report["direction_comparison"]["production_passed"]
                                     and report["direction_comparison"]["counterexample_reproduced"]
-                                    and max_gap < .002 and inner_min > 29.5 and inner_max < 120.5
+                                    and max_gap < .002 and inner_min > 44.7 and inner_max < 105.3
                                     and dm_bridge.startup_nonzero_frames == 0 and dm_bridge.max_phase_error < .0006)
             np.savez_compressed(args.output.with_suffix(".trace.npz"),
                                 trace=np.array(trace), time_s=np.array(trace_times), sample_period_s=.020,

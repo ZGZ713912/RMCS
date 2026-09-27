@@ -1,0 +1,166 @@
+{
+  "method": "2 PhysX closed-chain instances, 19 bodies / 6 live loops each; measure H-K and W-K projected into the passive knee hinge plane from body_link_pose_w",
+  "mode": "supplied_motor_poses",
+  "physical_range_given_by_user_deg": [
+    45.0,
+    105.0
+  ],
+  "physical_range_is_simulation_discovery": false,
+  "nominal_motor_range_numerical_tolerance_rad": 1e-05,
+  "fixture": "fixed base, gravity/gas spring off, only four active motors hold each sample for 1 s, passive joints free",
+  "passive_state_writes_after_reset": 0,
+  "solver_calls_during_physics": 0,
+  "source_hashes": {
+    "source_urdf_v5.0.urdf": "1862c3dfc8506fafb28826409ca5801faa9dcbab5730d8fb8669494ca1c167d3",
+    "model_spec.json": "9f6e71b1b79d1b346c0d06c57682c13cb1d40a59c1639240933e47dc21f0b53b",
+    "robot.usda": "e9a6c7184d126fa031b4a3f19298f61cb62d830221595d44163c6b541095d174"
+  },
+  "difference_bounds_rad": [
+    [
+      1.3300002813339233,
+      1.3300000429153442
+    ],
+    [
+      1.4204097429858606,
+      1.375395655632019
+    ]
+  ],
+  "max_angle_error_deg": 0.00010353173480837086,
+  "max_loop_gap_m": 2.2202897392525085e-07,
+  "cases": [
+    {
+      "kind": "calibrated_zero_offsets",
+      "inner_from_axes_deg": [
+        105.02166468315798,
+        105.0210982381988
+      ],
+      "spatial_angle_deg": [
+        104.99406435661454,
+        104.99349928090075
+      ],
+      "motor_angles_rad": [
+        -1.600000023841858,
+        -2.9300003051757812,
+        1.600000023841858,
+        2.930000066757202
+      ],
+      "difference_rad": [
+        1.3300002813339233,
+        1.3300000429153442
+      ],
+      "max_loop_gap_m": 1.7882926153297458e-07,
+      "joint_axes_relative_to_base_m": {
+        "L": {
+          "hip": [
+            -6.426125764846802e-08,
+            0.18380001513287425,
+            -0.0008369684219360352
+          ],
+          "knee": [
+            0.006131868809461594,
+            0.18476641504094005,
+            0.20907127857208252
+          ],
+          "wheel": [
+            -0.23333019390702248,
+            0.20009598461911082,
+            0.280820369720459
+          ]
+        },
+        "R": {
+          "hip": [
+            1.955777406692505e-08,
+            -0.1828000512905419,
+            0.0008324384689331055
+          ],
+          "knee": [
+            0.006131868809461594,
+            -0.18183366628363729,
+            0.2107405662536621
+          ],
+          "wheel": [
+            -0.2333308346569538,
+            -0.1965038445778191,
+            0.28262531757354736
+          ]
+        }
+      },
+      "within_nominal_motor_range": [
+        true,
+        true
+      ],
+      "kinematic_inner_deg": [
+        105.02167086770135,
+        105.02116569342986
+      ]
+    },
+    {
+      "kind": "current_CAN_feedback",
+      "inner_from_axes_deg": [
+        109.59152020753744,
+        107.3118664713785
+      ],
+      "spatial_angle_deg": [
+        109.55491494748843,
+        107.27981032924568
+      ],
+      "motor_angles_rad": [
+        -1.7352330684661865,
+        3.127542495727539,
+        1.5700541734695435,
+        2.9454498291015625
+      ],
+      "difference_rad": [
+        1.4204097429858606,
+        1.375395655632019
+      ],
+      "max_loop_gap_m": 2.2202897392525085e-07,
+      "joint_axes_relative_to_base_m": {
+        "L": {
+          "hip": [
+            0.0,
+            0.18380007473751903,
+            -0.0008369684219360352
+          ],
+          "knee": [
+            0.03437638282775879,
+            0.18475389806553721,
+            0.20632803440093994
+          ],
+          "wheel": [
+            -0.18425095081329346,
+            0.20031120209023356,
+            0.3275099992752075
+          ]
+        },
+        "R": {
+          "hip": [
+            0.0,
+            -0.1828000512905419,
+            0.0008324384689331055
+          ],
+          "knee": [
+            -0.0001558065414428711,
+            -0.18183326395228505,
+            0.2108302116394043
+          ],
+          "wheel": [
+            -0.23888564109802246,
+            -0.19649240048602223,
+            0.2851145267486572
+          ]
+        }
+      },
+      "within_nominal_motor_range": [
+        false,
+        false
+      ],
+      "kinematic_inner_deg": [
+        109.59162373927225,
+        107.31186942769743
+      ]
+    }
+  ],
+  "passed_checks": "PhysX vs kinematics angle agreement and closed-loop gaps; not real hardware calibration or admissibility",
+  "passed": true
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "name": "calibrated_zero_offsets",
+    "angles_rad": [
+      -1.6,
+      -2.93,
+      1.6,
+      2.93
+    ]
+  },
+  {
+    "name": "current_CAN_feedback",
+    "angles_rad": [
+      -1.7352330815594716,
+      3.1275425208821885,
+      1.5700541695277335,
+      2.9454497596704052
+    ],
+    "position_codes": [
+      33122,
+      33359,
+      32846,
+      32727
+    ],
+    "P_MAX_confirmed_by_user": 12.5
+  }
+]
