@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <numbers>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -39,11 +41,15 @@ public:
         Config& set_encoder_zero_point(int value) { return encoder_zero_point = value, *this; }
         Config& set_reversed() { return reversed = true, *this; }
         Config& enable_multi_turn_angle() { return multi_turn_angle_enabled = true, *this; }
+        Config& set_current_command_limit(double value) {
+            return current_command_limit = value, *this;
+        }
 
         Type motor_type;
         int encoder_zero_point = 0;
         bool reversed = false;
         bool multi_turn_angle_enabled = false;
+        double current_command_limit = 2048.0; // Protocol counts, independent of Kt or Nm.
     };
 
     LkMotor(
@@ -55,6 +61,25 @@ public:
         status_component.register_output(name_prefix + "/torque", torque_output_, 0.0);
         status_component.register_output(name_prefix + "/temperature", temperature_output_, 0.0);
         status_component.register_output(name_prefix + "/max_torque", max_torque_output_, 0.0);
+        status_component.register_output(name_prefix + "/raw_current", raw_current_output_, kNan);
+        status_component.register_output(name_prefix + "/current_raw", current_raw_output_, kNan);
+        status_component.register_output(
+            name_prefix + "/feedback_sequence", feedback_sequence_output_, 0.0);
+        status_component.register_output(
+            name_prefix + "/feedback_time_s", feedback_time_output_, kNan);
+        status_component.register_output(
+            name_prefix + "/feedback_age_s", feedback_age_output_, kNan);
+        status_component.register_output(
+            name_prefix + "/command_current_raw", command_current_output_, kNan);
+        status_component.register_output(
+            name_prefix + "/command_sequence", command_sequence_output_, 0.0);
+        status_component.register_output(
+            name_prefix + "/command_prepare_time_s", command_time_output_, kNan);
+        status_component.register_output(
+            name_prefix + "/command_limited", command_limited_output_, 0.0);
+
+        command_component.register_input(
+            name_prefix + "/control_current_raw", control_current_raw_, false);
 
         command_component.register_input( //
             name_prefix + "/control_torque", control_torque_, false);
@@ -74,6 +99,10 @@ public:
     }
 
     void configure(const Config& config) {
+        if (!std::isfinite(config.current_command_limit) || config.current_command_limit < 1.0
+            || config.current_command_limit > kRawCurrentMax)
+            throw std::invalid_argument("LK current command limit must be 1..2048 protocol counts");
+        current_command_limit_ = std::floor(config.current_command_limit);
         multi_turn_encoder_count_ = 0;
         last_raw_angle_ = 0;
 
@@ -132,6 +161,7 @@ public:
         multi_turn_angle_enabled_ = config.multi_turn_angle_enabled;
 
         const double sign = config.reversed ? -1.0 : 1.0;
+        direction_ = sign;
 
         status_angle_to_angle_coefficient_ = sign / raw_angle_modulus_ * 2 * std::numbers::pi;
         angle_to_command_angle_coefficient_ = sign * reduction_ratio * kRadToDeg * 100.0;
@@ -144,6 +174,12 @@ public:
         torque_to_command_current_coefficient_ = 1 / status_current_to_torque_coefficient_;
 
         *max_torque_output_ = max_torque();
+        feedback_version_.store(0, std::memory_order_relaxed);
+        *raw_current_output_ = *current_raw_output_ = *feedback_time_output_ =
+            *feedback_age_output_ = kNan;
+        *feedback_sequence_output_ = 0.0;
+        *command_current_output_ = *command_time_output_ = kNan;
+        *command_sequence_output_ = *command_limited_output_ = 0.0;
     }
 
     void store_status(std::span<const std::byte> can_data) {
@@ -156,20 +192,44 @@ public:
             uint8_t placeholder[7];
         } feedback alignas(CanPacket8) = std::bit_cast<decltype(feedback)>(can_packet);
 
-        // Exclude non-motor status messages
-        if ((feedback.command & 0xF0) != 0x80)
+        // Only status-2 replies contain iq / speed / encoder at these offsets.
+        if (feedback.command == 0x9C || (feedback.command >= 0xA1 && feedback.command <= 0xA8)) {
+            feedback_version_.fetch_add(1, std::memory_order_acq_rel);
             can_packet_.store(can_packet, std::memory_order::relaxed);
+            feedback_receive_time_.store(monotonic_time_s(), std::memory_order_relaxed);
+            feedback_version_.fetch_add(1, std::memory_order_release);
+        }
     }
 
     void update_status() {
+        CanPacket8 packet;
+        double receive_time = kNan;
+        uint64_t version = 0;
+        bool coherent = false;
+        // One CAN callback writer per motor. Do not block the executor on a packet arrival.
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            version = feedback_version_.load(std::memory_order_acquire);
+            if (version == 0 || (version & 1u))
+                continue;
+            packet = can_packet_.load(std::memory_order_relaxed);
+            receive_time = feedback_receive_time_.load(std::memory_order_relaxed);
+            if (version == feedback_version_.load(std::memory_order_acquire)) {
+                coherent = true;
+                break;
+            }
+        }
+        if (!coherent) {
+            if (std::isfinite(*feedback_time_output_))
+                *feedback_age_output_ = monotonic_time_s() - *feedback_time_output_;
+            return;
+        }
         const struct [[gnu::packed]] {
             uint8_t command;
             int8_t temperature;
             int16_t current;
             int16_t velocity;
             uint16_t encoder;
-        } feedback alignas(CanPacket8) =
-            std::bit_cast<decltype(feedback)>(can_packet_.load(std::memory_order::relaxed));
+        } feedback alignas(CanPacket8) = std::bit_cast<decltype(feedback)>(packet);
 
         // Temperature unit: celsius
         temperature_ = static_cast<double>(feedback.temperature);
@@ -203,7 +263,8 @@ public:
         velocity_ =
             status_velocity_to_velocity_coefficient_ * static_cast<double>(feedback.velocity);
 
-        // Torque unit: N*m
+        // Legacy current-derived torque proxy. It is not a shaft torque measurement;
+        // count-domain control/identification must use current_raw instead.
         torque_ = status_current_to_torque_coefficient_ * static_cast<double>(feedback.current);
 
         *angle_output_ = angle();
@@ -211,6 +272,11 @@ public:
         *velocity_output_ = velocity();
         *torque_output_ = torque();
         *temperature_output_ = temperature();
+        *raw_current_output_ = static_cast<double>(feedback.current);
+        *current_raw_output_ = direction_ * static_cast<double>(feedback.current);
+        *feedback_sequence_output_ = static_cast<double>(version / 2);
+        *feedback_time_output_ = receive_time;
+        *feedback_age_output_ = monotonic_time_s() - receive_time;
     }
 
     int64_t calibrate_zero_point() {
@@ -280,7 +346,7 @@ public:
     /// is the same as the `generate_status_request` command (only the command byte 0 is different,
     /// here it is 0xA1).
     CanPacket8 generate_torque_command(double control_torque) const {
-        if (std::isnan(control_torque))
+        if (!std::isfinite(control_torque))
             return generate_disable_command();
 
         /// @param current The value range is -2048~2048, corresponding to the actual torque current
@@ -298,6 +364,23 @@ public:
     }
 
     CanPacket8 generate_torque_command() const { return generate_torque_command(control_torque()); }
+
+    // Counts in the configured motor-axis direction, not A and not Nm. The sign
+    // is shared with angle/velocity; no torque constant or reduction ratio is used.
+    CanPacket8 generate_current_command(double current_raw) const {
+        if (!std::isfinite(current_raw))
+            return generate_disable_command();
+        const int16_t current = static_cast<int16_t>(
+            direction_
+            * std::round(std::clamp(current_raw, -current_command_limit_, current_command_limit_)));
+        const struct [[gnu::packed]] {
+            uint8_t id = 0xA1;
+            uint8_t placeholder0[3]{};
+            int16_t current;
+            uint8_t placeholder1[2]{};
+        } command alignas(CanPacket8){.current = current};
+        return std::bit_cast<CanPacket8>(command);
+    }
 
     /// @brief The host sends this command to control the motor's speed, with an optional torque
     /// limit.
@@ -421,15 +504,38 @@ public:
                 control_velocity_.bind_directly(kNan);
             if (!control_torque_.ready())
                 control_torque_.bind_directly(kNan);
+            if (!control_current_raw_.ready())
+                control_current_raw_.bind_directly(kNan);
         }
 
+        *command_time_output_ = monotonic_time_s();
+        *command_sequence_output_ += 1.0;
+        *command_current_output_ = kNan;
+        *command_limited_output_ = 0.0;
+        const double raw_request = *control_current_raw_;
+        if (!std::isnan(raw_request)) {
+            const auto packet = generate_current_command(raw_request);
+            *command_current_output_ =
+                std::isfinite(raw_request)
+                    ? std::round(
+                          std::clamp(raw_request, -current_command_limit_, current_command_limit_))
+                    : 0.0;
+            *command_limited_output_ =
+                !std::isfinite(raw_request) || std::abs(raw_request) > current_command_limit_;
+            return packet;
+        }
         if (!std::isnan(control_angle_shift()))
             return generate_angle_shift_command(control_angle_shift(), control_velocity());
         if (!std::isnan(control_angle()))
             return generate_angle_command(control_angle(), control_velocity());
         if (!std::isnan(control_velocity()))
             return generate_velocity_command(control_velocity(), control_torque());
-        return generate_torque_command(control_torque());
+        const double torque = control_torque();
+        const auto packet = generate_torque_command(torque);
+        *command_current_output_ = std::isfinite(torque)
+                                     ? direction_ * static_cast<double>(to_command_current(torque))
+                                     : 0.0;
+        return packet;
     }
 
     double control_torque() const {
@@ -461,9 +567,15 @@ public:
     }
 
 private:
+    static double monotonic_time_s() {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
     int16_t to_command_current(double torque) const {
         double current = torque_to_command_current_coefficient_ * torque;
-        current = std::round(std::clamp<double>(current, -kRawCurrentMax, kRawCurrentMax));
+        current = std::round(
+            std::clamp<double>(current, -current_command_limit_, current_command_limit_));
         return static_cast<int16_t>(current);
     }
 
@@ -534,18 +646,22 @@ private:
 
     double status_current_to_torque_coefficient_;
     double torque_to_command_current_coefficient_;
+    double direction_ = 1.0;
+    double current_command_limit_ = 2048.0;
 
     // Status
     std::atomic<CanPacket8> can_packet_;
+    std::atomic<uint64_t> feedback_version_{0};
+    std::atomic<double> feedback_receive_time_{kNan};
 
     int64_t multi_turn_encoder_count_ = 0;
     int last_raw_angle_ = 0;
 
-    double angle_;
-    double torque_;
-    double velocity_;
+    double angle_ = 0.0;
+    double torque_ = 0.0;
+    double velocity_ = 0.0;
     double max_torque_;
-    double temperature_;
+    double temperature_ = 0.0;
 
     rmcs_executor::Component::OutputInterface<double> angle_output_;
     rmcs_executor::Component::OutputInterface<int64_t> raw_angle_output_;
@@ -553,6 +669,16 @@ private:
     rmcs_executor::Component::OutputInterface<double> torque_output_;
     rmcs_executor::Component::OutputInterface<double> temperature_output_;
     rmcs_executor::Component::OutputInterface<double> max_torque_output_;
+    rmcs_executor::Component::OutputInterface<double> raw_current_output_;
+    rmcs_executor::Component::OutputInterface<double> current_raw_output_;
+    rmcs_executor::Component::OutputInterface<double> feedback_sequence_output_;
+    rmcs_executor::Component::OutputInterface<double> feedback_time_output_;
+    rmcs_executor::Component::OutputInterface<double> feedback_age_output_;
+    rmcs_executor::Component::OutputInterface<double> command_current_output_;
+    rmcs_executor::Component::OutputInterface<double> command_sequence_output_;
+    rmcs_executor::Component::OutputInterface<double> command_time_output_;
+    rmcs_executor::Component::OutputInterface<double> command_limited_output_;
+    rmcs_executor::Component::InputInterface<double> control_current_raw_;
 
     rmcs_executor::Component::InputInterface<double> control_torque_;
     rmcs_executor::Component::InputInterface<double> control_velocity_;

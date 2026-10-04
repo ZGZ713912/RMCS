@@ -42,6 +42,18 @@ pluginlib_export_plugin_description_file(rmcs_executor plugins.xml)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(current_sweep_test test/current_sweep_test.cpp)
+    target_include_directories(current_sweep_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
+    ament_add_gtest(lk_current_adrc_test test/lk_current_adrc_test.cpp)
+    target_include_directories(lk_current_adrc_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    ament_target_dependencies(lk_current_adrc_test rmcs_executor rclcpp pluginlib)
+
+    ament_add_gtest(deformable_current_sweep_test test/deformable_current_sweep_test.cpp)
+    target_include_directories(deformable_current_sweep_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    ament_target_dependencies(
+        deformable_current_sweep_test rmcs_executor rmcs_msgs rclcpp pluginlib std_srvs)
+
     ament_add_gtest(dm_motor_test test/dm_motor_test.cpp)
     target_include_directories(dm_motor_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
     ament_target_dependencies(dm_motor_test rmcs_executor)

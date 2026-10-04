@@ -349,6 +349,8 @@ private:
                 motor.configure(
                     device::LkMotor::Config{device::LkMotor::Type::kMG5010Ei36}
                         .set_reversed()
+                        .set_current_command_limit(
+                            status.get_parameter_or("joint_current_command_limit", 2048.0))
                         .enable_multi_turn_angle());
 
             imu_.set_coordinate_mapping([](double x, double y, double z) {

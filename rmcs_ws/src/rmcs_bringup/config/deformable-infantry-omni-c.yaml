@@ -283,7 +283,11 @@ lf_joint_controller:
     measurement_angle: /chassis/left_front_joint/physical_angle
     setpoint_angle: /chassis/left_front_joint/target_physical_angle
     setpoint_velocity: /chassis/left_front_joint/target_physical_velocity
-    control: /chassis/left_front_joint/control_torque
+    control: /chassis/left_front_joint/control_current_raw
+    output_domain: current_raw
+    # Preserve historical unsaturated CAN counts; this scale is not Nm calibration.
+    controller_output_to_current_raw: 5.74635241301908
+    applied_current_raw: /chassis/left_front_joint/command_current_raw
     dt: 0.001
     b0: -1.0
     kt: 1.0
@@ -296,17 +300,17 @@ lf_joint_controller:
     alpha1: 0.75
     alpha2: 0.7
     delta: 0.02
-    u_min: -200.0
-    u_max: 200.0
-    output_min: -200.0
-    output_max: 200.0
 
 lb_joint_controller:
   ros__parameters:
     measurement_angle: /chassis/left_back_joint/physical_angle
     setpoint_angle: /chassis/left_back_joint/target_physical_angle
     setpoint_velocity: /chassis/left_back_joint/target_physical_velocity
-    control: /chassis/left_back_joint/control_torque
+    control: /chassis/left_back_joint/control_current_raw
+    output_domain: current_raw
+    # Preserve historical unsaturated CAN counts; this scale is not Nm calibration.
+    controller_output_to_current_raw: 5.74635241301908
+    applied_current_raw: /chassis/left_back_joint/command_current_raw
     dt: 0.001
     b0: -1.0
     kt: 1.0
@@ -319,17 +323,17 @@ lb_joint_controller:
     alpha1: 0.75
     alpha2: 0.7
     delta: 0.02
-    u_min: -200.0
-    u_max: 200.0
-    output_min: -200.0
-    output_max: 200.0
 
 rb_joint_controller:
   ros__parameters:
     measurement_angle: /chassis/right_back_joint/physical_angle
     setpoint_angle: /chassis/right_back_joint/target_physical_angle
     setpoint_velocity: /chassis/right_back_joint/target_physical_velocity
-    control: /chassis/right_back_joint/control_torque
+    control: /chassis/right_back_joint/control_current_raw
+    output_domain: current_raw
+    # Preserve historical unsaturated CAN counts; this scale is not Nm calibration.
+    controller_output_to_current_raw: 5.74635241301908
+    applied_current_raw: /chassis/right_back_joint/command_current_raw
     dt: 0.001
     b0: -1.0
     kt: 1.0
@@ -342,17 +346,17 @@ rb_joint_controller:
     alpha1: 0.75
     alpha2: 0.7
     delta: 0.02
-    u_min: -200.0
-    u_max: 200.0
-    output_min: -200.0
-    output_max: 200.0
 
 rf_joint_controller:
   ros__parameters:
     measurement_angle: /chassis/right_front_joint/physical_angle
     setpoint_angle: /chassis/right_front_joint/target_physical_angle
     setpoint_velocity: /chassis/right_front_joint/target_physical_velocity
-    control: /chassis/right_front_joint/control_torque
+    control: /chassis/right_front_joint/control_current_raw
+    output_domain: current_raw
+    # Preserve historical unsaturated CAN counts; this scale is not Nm calibration.
+    controller_output_to_current_raw: 5.74635241301908
+    applied_current_raw: /chassis/right_front_joint/command_current_raw
     dt: 0.001
     b0: -1.0
     kt: 1.0
@@ -365,7 +369,3 @@ rf_joint_controller:
     alpha1: 0.75
     alpha2: 0.7
     delta: 0.02
-    u_min: -200.0
-    u_max: 200.0
-    output_min: -200.0
-    output_max: 200.0

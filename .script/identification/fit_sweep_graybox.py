@@ -163,9 +163,16 @@ def infer_target(fieldnames: Iterable[str]) -> str:
 def read_rows(path: Path) -> tuple[list[dict[str, str]], list[str]]:
     with path.open(newline="") as csv_file:
         reader = csv.DictReader(csv_file)
-        rows = list(reader)
         if reader.fieldnames is None:
             raise ValueError(f"CSV file has no header: {path}")
+        if "schema_version" in reader.fieldnames and any(
+            name.endswith("/current_raw") for name in reader.fieldnames
+        ):
+            raise ValueError(
+                "This CSV uses current counts, not calibrated Nm. Use fit_current_sweep.py; "
+                "do not infer physical inertia from the legacy /torque proxy."
+            )
+        rows = list(reader)
         return rows, reader.fieldnames
 
 
