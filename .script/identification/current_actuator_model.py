@@ -8,12 +8,35 @@ from pathlib import Path
 import numpy as np
 
 
+class StaticHoldTable:
+    """Lookup for the measured hold proxy, never a calibrated shaft torque."""
+    def __init__(self, path: Path, joint: str, condition: str, approach_direction: int):
+        document = json.loads(Path(path).read_text())
+        if document["condition"] != condition:
+            raise ValueError("Static hold condition mismatch")
+        points = [p for p in document["points"] if p["joint"] == joint
+                  and p["approach_direction"] == approach_direction and p["hold_validated"]]
+        if len(points) < 2:
+            raise ValueError("Need two validated hold angles for the requested direction")
+        points.sort(key=lambda p: p["target_angle_deg"])
+        self.angles = np.deg2rad([p["target_angle_deg"] for p in points])
+        self.torques = np.array([p["physical_torque_proxy_Nm_median"] for p in points])
+
+    def torque_proxy(self, physical_angle):
+        angle = np.asarray(physical_angle)
+        if not np.all(np.isfinite(angle)) or np.any(angle < self.angles[0]) or np.any(angle > self.angles[-1]):
+            raise ValueError("Angle outside static hold coverage")
+        return np.interp(angle, self.angles, self.torques)
+
+
 class CurrentActuatorModel:
     def __init__(self, path: Path, joint: str, condition: str):
         document = json.loads(Path(path).read_text())
         if document.get("command_domain") != "raw_current" or document.get("schema_version") != 1:
             raise ValueError("Model must use the current-count schema")
         self.model = document["models"][joint]
+        if self.model.get("excitation_mode") == "simultaneous":
+            raise ValueError("Synchronized ground fit is coupled; cannot use as independent joint actuator")
         if self.model["condition"] != condition or not self.model["training_ready"]:
             raise ValueError("Require a validated fit for this suspension/contact condition")
         if self.model["absolute_torque_identified"]:

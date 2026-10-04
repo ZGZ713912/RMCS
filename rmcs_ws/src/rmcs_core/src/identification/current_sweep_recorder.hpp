@@ -28,9 +28,9 @@ public:
 
     void open(
         const std::filesystem::path& path, const std::vector<std::string>& columns,
-        const std::string& metadata) {
+        const std::string& metadata, std::size_t flush_interval = 100) {
         close();
-        if (columns.empty() || columns.size() > kMaxColumns)
+        if (columns.empty() || columns.size() > kMaxColumns || flush_interval == 0)
             throw std::invalid_argument("Invalid sweep CSV column count");
         head_ = tail_ = dropped_ = 0;
         failed_ = false;
@@ -50,9 +50,9 @@ public:
         sidecar.exceptions(std::ios::badbit | std::ios::failbit);
         sidecar << metadata << '\n';
         sidecar.close();
-        worker_ = std::thread([this] {
+        worker_ = std::thread([this, flush_interval] {
             try {
-                auto next_flush = std::chrono::steady_clock::now();
+                std::size_t written = 0;
                 while (!stop_.load(std::memory_order_acquire)
                        || tail_.load(std::memory_order_relaxed)
                               != head_.load(std::memory_order_acquire)) {
@@ -66,10 +66,8 @@ public:
                         stream_ << (i ? "," : "") << row[i];
                     stream_ << '\n';
                     tail_.store(tail + 1, std::memory_order_release);
-                    const auto now = std::chrono::steady_clock::now();
-                    if (now >= next_flush) {
+                    if (++written % flush_interval == 0) {
                         stream_.flush();
-                        next_flush = now + std::chrono::milliseconds(100);
                     }
                 }
                 stream_.flush();
@@ -82,12 +80,14 @@ public:
                 failed_.store(true, std::memory_order_release);
             }
             try {
-                std::ofstream status{path_.string() + ".status.json"};
+                const auto temporary = path_.string() + ".status.json.tmp";
+                std::ofstream status{temporary};
                 status.exceptions(std::ios::badbit | std::ios::failbit);
                 status << "{\"completed\":" << (completed_.load() ? "true" : "false")
                        << ",\"write_failed\":" << (failed() ? "true" : "false")
                        << ",\"dropped_samples\":" << dropped() << "}\n";
                 status.close();
+                std::filesystem::rename(temporary, path_.string() + ".status.json");
             } catch (...) {
                 failed_.store(true, std::memory_order_release);
             }

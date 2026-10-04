@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+import subprocess
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -21,6 +23,9 @@ sys.path.insert(0, str(SCRIPTS))
 import fit_current_sweep as fit
 from current_actuator_model import CurrentActuatorModel
 from prepare_current_sweep import generate
+from summarize_static_hold import summarize
+from current_actuator_model import StaticHoldTable
+import collect_current_sweep
 
 
 def synthesize(path: Path):
@@ -172,6 +177,109 @@ class CurrentSweepFitTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "current counts"):
             module.read_rows(self.csv)
 
+    def test_value_collector_columns_are_accepted_without_losing_precision(self):
+        path = Path(self.temp.name) / "collector.csv"
+        aliases = {"host_time_s": "host_time_s", "stage": "stage", "point_index": "point",
+                   "active_joint": "joint", "amplitude_raw": "amplitude_raw",
+                   "frequency_hz": "frequency_hz", "actuation_active": "actuation_active",
+                   "queue_dropped": "dropped_samples"}
+        with self.csv.open(newline="") as source, path.open("w", newline="") as destination:
+            reader = csv.DictReader(source)
+            names = ["/identification/" + aliases[n] if n in aliases else n
+                     for n in reader.fieldnames if n != "schema_version"]
+            writer = csv.DictWriter(destination, names)
+            writer.writeheader()
+            for row in reader:
+                writer.writerow({"/identification/" + aliases[n] if n in aliases else n: v
+                                 for n, v in row.items() if n != "schema_version"})
+        for suffix in (".json", ".status.json"):
+            Path(str(path) + suffix).write_text(Path(str(self.csv) + suffix).read_text())
+        original, collector = fit.load_dataset(self.csv), fit.load_dataset(path)
+        np.testing.assert_array_equal(original.samples[0], collector.samples[0])
+        np.testing.assert_array_equal(original.commands[0], collector.commands[0])
+
+    def test_static_hold_deduplicates_feedback_and_preserves_proxy_axis(self):
+        path = Path(self.temp.name) / "holds.csv"
+        metadata = {"condition": "grounded", "hold_duration_s": 0.5,
+                    "max_feedback_age_s": 0.05, "angle_tolerance_rad": 0.01,
+                    "settle_velocity_rad_s": 0.04}
+        Path(str(path) + ".json").write_text(json.dumps(metadata))
+        Path(str(path) + ".status.json").write_text(json.dumps(
+            {"completed": True, "write_failed": False, "dropped_samples": 0}))
+        rows = []
+        for point, q in enumerate((0.5, 1.0)):
+            for sequence in range(1, 101):
+                row = {"/identification/stage": 7, "/identification/actuation_active": 1,
+                       "/identification/point": point, "/identification/approach_direction": 1,
+                       "/identification/host_time_s": point + sequence * 0.01}
+                for joint in fit.JOINTS:
+                    p = f"/chassis/{joint}_joint/"
+                    row.update({p + n: v for n, v in {
+                        "feedback_sequence": sequence, "physical_angle": q,
+                        "physical_velocity": 0, "target_physical_angle": q,
+                        "current_raw": -100 * q, "torque": -2 * q,
+                        "physical_torque_proxy": 2 * q, "temperature": 30,
+                        "feedback_time_s": point + sequence * 0.01,
+                        "command_limited": 0, "current_clipped": 0, "current_rate_limited": 0}.items()})
+                rows.extend((row, row.copy()))
+        with path.open("w", newline="") as stream:
+            writer = csv.DictWriter(stream, list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        output = path.with_suffix(".static_hold.csv")
+        result = summarize(path, output)
+        self.assertEqual(len(result), 8)
+        self.assertEqual(result[0]["samples"], 100)
+        self.assertFalse(result[0]["torque_calibrated"])
+        table = StaticHoldTable(output.with_suffix(".json"), "left_front", "grounded", 1)
+        self.assertAlmostEqual(float(table.torque_proxy(0.75)), 1.5)
+        with self.assertRaises(ValueError):
+            table.torque_proxy(1.5)
+
+    def test_fetch_waits_for_status_and_copies_all_sidecars_before_summary(self):
+        directory = Path(self.temp.name) / "download"
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            if command[0] == "ssh":
+                return subprocess.CompletedProcess(command, 0,
+                    '["/tmp/deformable_current_sweep_grounded_test.csv"]', "")
+            if command[-2].endswith(".csv.json"):
+                Path(command[-1], "deformable_current_sweep_grounded_test.csv.json").write_text('{}')
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(sys, "argv", ["collect", "--condition", "grounded",
+                                      "--output-dir", str(directory), "--skip-fit"]), \
+             patch.object(collect_current_sweep.subprocess, "run", side_effect=run), \
+             patch("summarize_static_hold.summarize") as summary:
+            self.assertEqual(collect_current_sweep.main(), 0)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual([c[-2] for c in calls[1:]], [
+            "remote:/tmp/deformable_current_sweep_grounded_test.csv" + suffix
+            for suffix in ("", ".json", ".status.json")])
+        summary.assert_called_once()
+
+    def test_simultaneous_rows_collect_each_joint_and_require_mode_metadata(self):
+        path = Path(self.temp.name) / "simultaneous.csv"
+        with self.csv.open(newline="") as source, path.open("w", newline="") as target:
+            reader = csv.DictReader(source)
+            writer = csv.DictWriter(target, reader.fieldnames)
+            writer.writeheader()
+            for row in reader:
+                row["active_joint"] = -1
+                writer.writerow(row)
+        metadata = json.loads(Path(str(self.csv) + ".json").read_text())
+        metadata["excitation_mode"] = "simultaneous"
+        metadata["condition"] = "grounded"
+        Path(str(path) + ".json").write_text(json.dumps(metadata))
+        Path(str(path) + ".status.json").write_text(Path(str(self.csv) + ".status.json").read_text())
+        data = fit.load_dataset(path)
+        self.assertTrue(all(len(s) > 100 for s in data.samples))
+        self.assertEqual([len(s) for s in data.samples], [len(data.samples[0])] * 4)
+        metadata["excitation_mode"] = "individual"
+        Path(str(path) + ".json").write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(ValueError, "simultaneous"):
+            fit.load_dataset(path)
+
     def test_configs_copy_actual_hardware_and_adrc_and_have_no_nm_clamps(self):
         config_dir = ROOT / "rmcs_ws/src/rmcs_bringup/config"
         plugin_types = {p.attrib["type"] for p in
@@ -187,7 +295,7 @@ class CurrentSweepFitTest(unittest.TestCase):
                 self.assertFalse(set(p) & {"u_min", "u_max", "output_min", "output_max"})
         source = yaml.safe_load((config_dir / "deformable-infantry-omni-rl.yaml").read_text())
         for condition in ("suspended", "grounded"):
-            config = generate(source, condition, [65, 50, 35, 25, 35, 50, 65], [128, 384])
+            config = generate(source, condition)
             committed = yaml.safe_load((ROOT / f"rmcs_ws/src/rmcs_bringup/config/deformable-current-sweep-{condition}.yaml").read_text())
             self.assertEqual(config, committed)
             components = config["rmcs_executor"]["ros__parameters"]["components"]
@@ -196,12 +304,11 @@ class CurrentSweepFitTest(unittest.TestCase):
             self.assertIn("DeformableInfantryOmniC", components[0])
             self.assertFalse(any("RlBridge" in c or "PidController" in c for c in components))
             p = config["current_sweep"]["ros__parameters"]
-            self.assertEqual(p["max_command_current_raw"], 2048)
-            self.assertEqual(p["max_current_slew_raw_s"], 0)
-            snapshot = json.loads(p["experiment_config_json"])
+            self.assertEqual(p["min_angle_deg"], source["chassis_controller"]["ros__parameters"]["min_angle"])
+            self.assertEqual(config["value_collector"]["ros__parameters"]["write_interval"], 5)
+            self.assertEqual(config["value_collector"]["ros__parameters"]["flush_interval"], 1000)
             for controller in ("lf_joint_controller", "lb_joint_controller", "rb_joint_controller", "rf_joint_controller"):
                 p = config[controller]["ros__parameters"]
-                self.assertEqual(snapshot["adrc"][controller], p)
                 self.assertEqual(p["b0"], source[controller]["ros__parameters"]["b0"])
                 self.assertTrue(p["control"].endswith("/servo_current_raw"))
                 self.assertFalse(set(p) & {"u_min", "u_max", "output_min", "output_max"})

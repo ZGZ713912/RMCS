@@ -1,102 +1,76 @@
 #!/usr/bin/env python3
-"""Generate a joint-only current-count experiment from the current vehicle config."""
-
-from __future__ import annotations
-
+"""Generate synchronized slow/fast angle sweeps, preserving the vehicle ADRC."""
 import argparse
 import copy
 import json
 from pathlib import Path
-
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "rmcs_ws/src/rmcs_bringup/config"
 JOINTS = ("left_front", "left_back", "right_back", "right_front")
 CONTROLLERS = ("lf_joint_controller", "lb_joint_controller", "rb_joint_controller", "rf_joint_controller")
 
-
-def generate(source: dict, condition: str, angles: list[float], amplitudes: list[float]) -> dict:
+def generate(source, condition):
     if condition not in ("suspended", "grounded"):
-        raise ValueError("condition must be suspended or grounded")
+        raise ValueError("Invalid condition")
     hardware = [c for c in source["rmcs_executor"]["ros__parameters"]["components"]
                 if "rmcs_core::hardware::DeformableInfantryOmni" in c]
     if len(hardware) != 1:
-        raise ValueError("Source must select exactly one deformable hardware plugin")
-    hardware_name = hardware[0].split("->")[1].strip()
-    parameters = copy.deepcopy(source[hardware_name]["ros__parameters"])
-    parameters["joint_current_command_limit"] = 2048.0
+        raise ValueError("Require one deformable hardware plugin")
+    name = hardware[0].split("->")[1].strip()
+    parameters = copy.deepcopy(source[name]["ros__parameters"])
+    parameters.update(supercap_disabled=True, joint_current_command_limit=2048.0)
     limits = source["chassis_controller"]["ros__parameters"]
-    low, high = float(limits["min_angle"]), float(limits["max_angle"])
-    if not angles or not amplitudes or any(not low < q < high for q in angles):
-        raise ValueError("Supply interior physical angles and nonempty count amplitudes")
-    if any(not 0 < u <= 2048 for u in amplitudes):
-        raise ValueError("Amplitudes must be positive CAN counts, at most 2048")
-    components = hardware + [
-        "rmcs_core::controller::identification::DeformableCurrentSweep -> current_sweep"
-    ] + [f"rmcs_core::controller::chassis::DeformableJointController -> {c}" for c in CONTROLLERS]
-    result = {
-        "rmcs_executor": {"ros__parameters": {"update_rate": 1000.0, "components": components}},
-        hardware_name: {"ros__parameters": parameters},
-        "current_sweep": {"ros__parameters": {
-            "condition": condition,
-            "require_remote_enable": False,
-            "angles_deg": list(map(float, angles)),
-            "amplitudes_raw": list(map(float, amplitudes)),
-            "current_to_physical_direction": [-1.0] * 4,
-            "min_angle_deg": low, "max_angle_deg": high,
-            "move_speed_rad_s": 0.08,
-            "settle_time_s": 1.0, "settle_timeout_s": 30.0, "move_timeout_s": 120.0,
-            "angle_tolerance_rad": 0.01, "settle_velocity_rad_s": 0.04,
-            "max_excursion_rad": 0.14, "max_velocity_rad_s": 3.0,
-            "max_temperature_c": 60.0, "max_feedback_age_s": 0.05,
-            "max_feedback_current_raw": 4096.0, "max_update_gap_s": 0.05,
-            "start_frequency_hz": 0.2, "end_frequency_hz": 8.0,
-            "chirp_duration_s": 20.0, "validation_duration_s": 6.0,
-            "validation_step_s": 0.5, "probe_ramp_s": 0.3,
-            "max_command_current_raw": 2048.0,
-            "max_current_slew_raw_s": 0.0,
-        }},
-    }
+    components = hardware + ["rmcs_core::controller::identification::DeformableCurrentSweep -> current_sweep"]
+    components += [f"rmcs_core::controller::chassis::DeformableJointController -> {c}" for c in CONTROLLERS]
+    components += ["rmcs_core::debug::ValueCollector -> value_collector"]
+    result = {"rmcs_executor": {"ros__parameters": {"update_rate": 1000.0, "components": components}},
+              name: {"ros__parameters": parameters},
+              "current_sweep": {"ros__parameters": {
+                  "condition": condition, "min_angle_deg": float(limits["min_angle"]),
+                  "max_angle_deg": float(limits["max_angle"]), "move_speed_rad_s": 0.08,
+                  "slow_duration_s": 120.0, "fast_duration_s": 60.0,
+                  "slow_start_frequency_hz": 0.02, "slow_end_frequency_hz": 0.06,
+                   "fast_start_frequency_hz": 0.06, "fast_end_frequency_hz": 0.12,
+                   "ultra_fast_frequency_hz": 1.0, "ultra_fast_duration_s": 10.0}}}
+    signals = ["/identification/" + n for n in ("host_time_s", "elapsed_s", "run", "stage",
+               "frequency_hz", "actuation_active", "remote_left", "remote_right")]
     for controller, joint in zip(CONTROLLERS, JOINTS):
         p = copy.deepcopy(source[controller]["ros__parameters"])
-        if p.get("output_domain") != "current_raw":
-            raise ValueError("Source ADRC must use current_raw; do not infer a torque calibration")
         prefix = f"/chassis/{joint}_joint"
-        p["control"] = prefix + "/servo_current_raw"
-        p["setpoint_angle"] = prefix + "/target_physical_angle"
-        p["setpoint_velocity"] = prefix + "/target_physical_velocity"
-        for obsolete in ("u_min", "u_max", "output_min", "output_max"):
-            p.pop(obsolete, None)
+        p.update(control=prefix + "/servo_current_raw", setpoint_angle=prefix + "/target_physical_angle",
+                 setpoint_velocity=prefix + "/target_physical_velocity")
         result[controller] = {"ros__parameters": p}
+        signals += [prefix + "/" + s for s in (
+            "physical_angle", "physical_velocity", "rl_angle", "rl_velocity", "torque", "current_raw", "raw_current",
+            "torque_per_current_raw", "target_torque_proxy", "command_torque_proxy", "physical_torque_proxy",
+            "target_physical_torque_proxy", "command_physical_torque_proxy",
+            "temperature", "target_physical_angle", "target_physical_velocity", "servo_current_raw",
+            "control_current_raw", "command_current_raw", "command_sequence", "command_prepare_time_s",
+            "command_limited", "feedback_sequence", "feedback_time_s", "feedback_age_s")]
+    signals += ["/chassis/imu/roll", "/chassis/imu/pitch"]
+    result["value_collector"] = {"ros__parameters": {
+        "experiment_mode": True, "csv_path": f"/tmp/deformable_angle_sweep_{condition}_<timestamp>.csv",
+        "signals": signals, "write_interval": 5, "flush_interval": 1000}}
     result["current_sweep"]["ros__parameters"]["experiment_config_json"] = json.dumps({
-        "hardware_plugin": hardware[0].split("->")[0].strip(),
-        "hardware_parameters": parameters,
-        "adrc": {name: result[name]["ros__parameters"] for name in CONTROLLERS},
+        "hardware": parameters,
+        "adrc": {c: result[c]["ros__parameters"] for c in CONTROLLERS},
         "sweep": copy.deepcopy(result["current_sweep"]["ros__parameters"]),
-    }, ensure_ascii=False, separators=(",", ":"))
+        "collector": result["value_collector"]["ros__parameters"],
+    }, separators=(",", ":"))
     return result
 
-
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=CONFIG_DIR / "deformable-infantry-omni-rl.yaml")
     parser.add_argument("--condition", choices=("suspended", "grounded"), required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--angles-deg", type=float, nargs="+", default=[65, 50, 35, 25, 35, 50, 65])
-    parser.add_argument("--amplitudes-raw", type=float, nargs="+", default=[128, 384])
     args = parser.parse_args()
-    config = generate(yaml.safe_load(args.source.read_text()), args.condition,
-                      args.angles_deg, args.amplitudes_raw)
     output = args.output or CONFIG_DIR / f"deformable-current-sweep-{args.condition}.yaml"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text("# Generated by .script/identification/prepare_current_sweep.py.\n"
-                      "# Explicit /identification/start required; no automatic motion.\n"
-                      "# Amplitudes and command limits are CAN counts, not N m.\n"
-                      + yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
+    output.write_text("# Generated synchronized angle sweep; DR16 double middle starts.\n"
+                      + yaml.safe_dump(generate(yaml.safe_load(args.source.read_text()), args.condition), sort_keys=False))
     print(output)
-
 
 if __name__ == "__main__":
     main()

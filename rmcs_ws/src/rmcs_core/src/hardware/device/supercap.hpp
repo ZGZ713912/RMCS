@@ -22,15 +22,19 @@ using rmcs_executor::Component;
 
 class Supercap {
 public:
-    explicit Supercap(Component& status_component, Component& command_component) {
+    explicit Supercap(
+        Component& status_component, Component& command_component, bool disabled = false)
+        : disabled_(disabled) {
         status_component.register_output("/chassis/power", chassis_power_, 0.0);
         status_component.register_output("/chassis/voltage", chassis_voltage_, 0.0);
         status_component.register_output("/chassis/supercap/voltage", supercap_voltage_, 0.0);
         status_component.register_output("/chassis/supercap/enabled", supercap_enabled_, false);
 
-        command_component.register_input("/referee/chassis/output_status", chassis_output_status_);
-        command_component.register_input(
-            "/chassis/supercap/charge_power_limit", supercap_charge_power_limit_);
+        if (!disabled_) {
+            command_component.register_input("/referee/chassis/output_status", chassis_output_status_);
+            command_component.register_input(
+                "/chassis/supercap/charge_power_limit", supercap_charge_power_limit_);
+        }
     }
 
     void store_status(std::span<const std::byte> can_data) {
@@ -50,7 +54,9 @@ public:
     }
 
     CanPacket8::Quarter generate_command() const {
-        SupercapCommand command;
+        SupercapCommand command{};
+        if (disabled_)
+            return std::bit_cast<CanPacket8::Quarter>(command);
 
         command.enabled = *chassis_output_status_;
 
@@ -64,7 +70,9 @@ public:
     }
 
     CanPacket8::Quarter generate_disable_command() const {
-        SupercapCommand command;
+        SupercapCommand command{};
+        if (disabled_)
+            return std::bit_cast<CanPacket8::Quarter>(command);
 
         command.enabled = false;
         const double power_limit = *supercap_charge_power_limit_;
@@ -113,6 +121,7 @@ private:
 
     Component::InputInterface<bool> chassis_output_status_;
     Component::InputInterface<double> supercap_charge_power_limit_;
+    bool disabled_ = false;
 };
 
 } // namespace rmcs_core::hardware::device

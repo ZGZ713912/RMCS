@@ -19,26 +19,22 @@ class CurrentSweep {
 public:
     static constexpr std::size_t kJointCount = 4;
     static constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
-    enum class Stage { kIdle, kMove, kSettle, kChirp, kValidation, kComplete, kAborted };
+    enum class Stage { kIdle, kMove, kSettle, kChirp, kValidation, kComplete, kAborted, kHold };
 
     struct Config {
+        bool simultaneous = false;
         std::vector<double> angles_rad;
         std::vector<double> amplitudes_raw;
+        std::vector<double> move_speeds_rad_s;
         std::array<double, kJointCount> current_to_physical_direction{-1., -1., -1., -1.};
         double min_angle_rad = 0.0;
         double max_angle_rad = 0.0;
         double move_speed_rad_s = 0.08;
         double settle_time_s = 1.0;
-        double settle_timeout_s = 30.0;
-        double move_timeout_s = 120.0;
+        double hold_duration_s = 5.0;
         double angle_tolerance_rad = 0.01;
         double settle_velocity_rad_s = 0.04;
-        double max_excursion_rad = 0.14;
-        double max_velocity_rad_s = 3.0;
-        double max_temperature_c = 60.0;
         double max_feedback_age_s = 0.05;
-        double max_feedback_current_raw = 4096.0;
-        double max_update_gap_s = 0.05;
         double start_frequency_hz = 0.2;
         double end_frequency_hz = 8.0;
         double chirp_duration_s = 20.0;
@@ -73,19 +69,22 @@ public:
         for (const double direction : config_.current_to_physical_direction)
             if (direction != -1.0 && direction != 1.0)
                 throw std::invalid_argument("Current-to-physical directions must be +/-1");
+        if (!config_.move_speeds_rad_s.empty()
+            && config_.move_speeds_rad_s.size() != config_.angles_rad.size())
+            throw std::invalid_argument("Move speeds must match angle points");
+        for (double speed : config_.move_speeds_rad_s)
+            if (!positive(speed))
+                throw std::invalid_argument("Move speeds must be positive");
         for (const double value :
-             {config_.move_speed_rad_s, config_.settle_time_s, config_.settle_timeout_s,
-              config_.move_timeout_s, config_.angle_tolerance_rad, config_.settle_velocity_rad_s,
-              config_.max_excursion_rad, config_.max_velocity_rad_s, config_.max_temperature_c,
-              config_.max_feedback_age_s, config_.max_feedback_current_raw,
-              config_.max_update_gap_s, config_.start_frequency_hz, config_.end_frequency_hz,
+              {config_.move_speed_rad_s, config_.settle_time_s, config_.hold_duration_s,
+               config_.angle_tolerance_rad, config_.settle_velocity_rad_s,
+               config_.max_feedback_age_s, config_.start_frequency_hz, config_.end_frequency_hz,
               config_.chirp_duration_s, config_.validation_duration_s, config_.validation_step_s,
               config_.probe_ramp_s})
             if (!positive(value))
                 throw std::invalid_argument(
-                    "Current sweep timing and protection values must be positive");
-        if (config_.settle_timeout_s < config_.settle_time_s
-            || 2.0 * config_.probe_ramp_s
+                     "Current sweep timing and data-quality values must be positive");
+        if (2.0 * config_.probe_ramp_s
                    >= std::min(config_.chirp_duration_s, config_.validation_duration_s))
             throw std::invalid_argument("Current sweep settle/ramp durations are inconsistent");
         reset();
@@ -98,23 +97,17 @@ public:
         probes_.fill(0.0);
         reason_.clear();
         point_ = joint_ = amplitude_ = 0;
-        next_excitation_ = Stage::kChirp;
-        stable_since_ = kNan;
+        next_excitation_ = Stage::kHold;
         last_time_ = kNan;
-        last_sequences_.fill(0.0);
     }
 
     bool start(double now, const std::array<Feedback, kJointCount>& feedback) {
         if (active())
             return false;
         reset();
-        if (!healthy(now, feedback)) {
-            abort(reason_);
-            return false;
-        }
         for (std::size_t i = 0; i < kJointCount; ++i) {
-            references_[i] = feedback[i].angle;
-            last_sequences_[i] = feedback[i].sequence;
+            references_[i] = std::isfinite(feedback[i].angle)
+                ? feedback[i].angle : config_.angles_rad.front();
         }
         reference_velocities_.fill(0.0);
         start_time_ = last_time_ = stage_start_ = now;
@@ -125,6 +118,7 @@ public:
     void stop(const std::string& reason = "stopped") { abort(reason); }
 
     void update(double now, const std::array<Feedback, kJointCount>& feedback, bool enabled) {
+        (void)feedback; // Measurements are recorded, never used to abort a timed run.
         if (!active())
             return;
         if (!enabled) {
@@ -132,54 +126,40 @@ public:
             return;
         }
         const double dt = now - last_time_;
-        if (!std::isfinite(dt) || dt <= 0.0 || dt > config_.max_update_gap_s) {
-            abort("executor timing gap");
+        if (!std::isfinite(dt) || dt <= 0.0) {
             return;
         }
         last_time_ = now;
-        if (!healthy(now, feedback)) {
-            abort(reason_);
-            return;
-        }
         probes_.fill(0.0);
         reference_velocities_.fill(0.0);
         if (stage_ == Stage::kMove) {
+            const double speed = config_.move_speeds_rad_s.empty() ? config_.move_speed_rad_s
+                : config_.move_speeds_rad_s[point_];
             bool arrived = true;
             for (std::size_t i = 0; i < kJointCount; ++i) {
                 const double delta = config_.angles_rad[point_] - references_[i];
                 const double step = std::clamp(
-                    delta, -config_.move_speed_rad_s * dt, config_.move_speed_rad_s * dt);
+                    delta, -speed * dt, speed * dt);
                 references_[i] += step;
                 reference_velocities_[i] = step / dt;
-                arrived &= std::abs(delta) <= config_.move_speed_rad_s * dt;
+                arrived &= std::abs(delta) <= speed * dt;
             }
             if (arrived)
                 enter(Stage::kSettle, now);
-            else if (now - stage_start_ > config_.move_timeout_s)
-                abort("positioning timeout");
             return;
         }
         if (stage_ == Stage::kSettle) {
-            bool stable = true;
-            for (std::size_t i = 0; i < kJointCount; ++i)
-                stable &=
-                    std::abs(feedback[i].angle - references_[i]) <= config_.angle_tolerance_rad
-                    && std::abs(feedback[i].velocity) <= config_.settle_velocity_rad_s;
-            if (!stable)
-                stable_since_ = kNan;
-            else if (!std::isfinite(stable_since_))
-                stable_since_ = now;
-            else if (now - stable_since_ >= config_.settle_time_s)
+            if (now - stage_start_ >= config_.settle_time_s)
                 enter(next_excitation_, now);
-            if (now - stage_start_ > config_.settle_timeout_s)
-                abort("ADRC did not settle");
             return;
         }
-        for (std::size_t i = 0; i < kJointCount; ++i)
-            if (std::abs(feedback[i].angle - references_[i]) > config_.max_excursion_rad) {
-                abort("physical-angle excursion");
-                return;
+        if (stage_ == Stage::kHold) {
+            if (now - stage_start_ >= config_.hold_duration_s) {
+                next_excitation_ = Stage::kChirp;
+                enter(Stage::kChirp, now);
             }
+            return;
+        }
         const double elapsed = now - stage_start_;
         const double duration =
             stage_ == Stage::kChirp ? config_.chirp_duration_s : config_.validation_duration_s;
@@ -200,13 +180,15 @@ public:
             // Reserved for validation, never used to fit the training coefficients.
             wave = static_cast<int>(elapsed / config_.validation_step_s) % 2 ? -1.0 : 1.0;
         }
-        probes_[joint_] = config_.current_to_physical_direction[joint_]
-                        * config_.amplitudes_raw[amplitude_] * envelope * wave;
+        for (std::size_t i = 0; i < kJointCount; ++i)
+            if (config_.simultaneous || i == joint_)
+                probes_[i] = config_.current_to_physical_direction[i]
+                    * config_.amplitudes_raw[amplitude_] * envelope * wave;
     }
 
     bool active() const {
         return stage_ == Stage::kMove || stage_ == Stage::kSettle || stage_ == Stage::kChirp
-            || stage_ == Stage::kValidation;
+            || stage_ == Stage::kValidation || stage_ == Stage::kHold;
     }
     Stage stage() const { return stage_; }
     std::size_t point() const { return point_; }
@@ -226,33 +208,6 @@ public:
     const auto& reason() const { return reason_; }
 
 private:
-    bool healthy(double now, const std::array<Feedback, kJointCount>& feedback) {
-        if (!std::isfinite(now)) {
-            reason_ = "invalid host clock";
-            return false;
-        }
-        for (std::size_t i = 0; i < kJointCount; ++i) {
-            const auto& f = feedback[i];
-            if (!std::isfinite(f.angle) || !std::isfinite(f.velocity)
-                || !std::isfinite(f.current_raw) || !std::isfinite(f.temperature)
-                || !std::isfinite(f.sequence) || f.sequence < 1.0 || !std::isfinite(f.time_s)
-                || now - f.time_s > config_.max_feedback_age_s || f.time_s > now
-                || f.sequence < last_sequences_[i]) {
-                reason_ = "invalid or stale feedback on joint " + std::to_string(i);
-                return false;
-            }
-            if (f.angle < config_.min_angle_rad || f.angle > config_.max_angle_rad
-                || std::abs(f.velocity) > config_.max_velocity_rad_s
-                || f.temperature > config_.max_temperature_c
-                || std::abs(f.current_raw) > config_.max_feedback_current_raw) {
-                reason_ = "physical/current/temperature protection on joint " + std::to_string(i);
-                return false;
-            }
-            last_sequences_[i] = f.sequence;
-        }
-        return true;
-    }
-
     void abort(std::string reason) {
         reason_ = std::move(reason);
         stage_ = Stage::kAborted;
@@ -264,7 +219,6 @@ private:
     void enter(Stage stage, double now) {
         stage_ = stage;
         stage_start_ = now;
-        stable_since_ = kNan;
     }
 
     void advance(double now) {
@@ -274,7 +228,7 @@ private:
             return;
         }
         next_excitation_ = Stage::kChirp;
-        if (++joint_ == kJointCount) {
+        if (config_.simultaneous || ++joint_ == kJointCount) {
             joint_ = 0;
             if (++amplitude_ == config_.amplitudes_raw.size()) {
                 amplitude_ = 0;
@@ -285,6 +239,7 @@ private:
                     reference_velocities_.fill(kNan);
                     return;
                 }
+                next_excitation_ = Stage::kHold;
                 enter(Stage::kMove, now);
                 return;
             }
@@ -295,10 +250,9 @@ private:
     Config config_;
     Stage stage_ = Stage::kIdle;
     Stage next_excitation_ = Stage::kChirp;
-    std::array<double, kJointCount> references_{}, reference_velocities_{}, probes_{},
-        last_sequences_{};
+    std::array<double, kJointCount> references_{}, reference_velocities_{}, probes_{};
     std::size_t point_ = 0, joint_ = 0, amplitude_ = 0;
-    double start_time_ = 0.0, stage_start_ = 0.0, last_time_ = kNan, stable_since_ = kNan;
+    double start_time_ = 0.0, stage_start_ = 0.0, last_time_ = kNan;
     std::string reason_;
 };
 

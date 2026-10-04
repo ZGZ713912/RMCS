@@ -77,7 +77,10 @@ public:
             });
     }
 
-    ~DeformableInfantryOmni() override = default;
+    ~DeformableInfantryOmni() override {
+        top_board_.reset();
+        bottom_board_.reset();
+    }
 
     void before_updating() override { top_board_->request_hard_sync_read(); }
 
@@ -115,11 +118,17 @@ private:
     class Command : public Component {
     public:
         explicit Command(DeformableInfantryOmni& deformableInfantry)
-            : deformableInfantry(deformableInfantry) {}
+            : deformableInfantry(deformableInfantry) {
+            register_output("/chassis/joint_command_time_s", command_time_, 0.0);
+        }
 
-        void update() override { deformableInfantry.command_update(); }
+        void update() override {
+            deformableInfantry.command_update();
+            *command_time_ = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+        }
 
         DeformableInfantryOmni& deformableInfantry;
+        OutputInterface<double> command_time_;
     };
 
     struct TopBoard final : public librmcs::board::RmcsBoardLite::Callback {
@@ -589,8 +598,6 @@ private:
         DeformableInfantryOmni& status_;
         Component& command_;
 
-        std::unique_ptr<librmcs::board::RmcsBoardLite> board_;
-
         // Interfaces
 
         OutputInterface<rmcs_description::Tf>& tf_{status_.tf_};
@@ -650,7 +657,8 @@ private:
         };
 
         std::atomic<bool> supercap_status_received_{false};
-        device::Supercap supercap_{status_, command_};
+        device::Supercap supercap_{
+            status_, command_, status_.get_parameter_or("supercap_disabled", false)};
 
         device::DjiMotor gimbal_bullet_feeder_{status_, command_, "/gimbal/bullet_feeder"};
 
@@ -775,6 +783,8 @@ private:
         auto status() const -> std::vector<std::string> { return monitor_.text(); }
 
         StatusMonitor monitor_{};
+        // Stop and join USB callbacks before destroying anything they access.
+        std::unique_ptr<librmcs::board::RmcsBoardLite> board_;
     };
 
     auto status_service_callback(const std::shared_ptr<std_srvs::srv::Trigger::Response>& response)
@@ -814,9 +824,9 @@ private:
     OutputInterface<double> auto_aim_yaw_velocity_;
     InputInterface<Clock::time_point> timestamp_;
 
+    std::unique_ptr<device::RemoteControl> remote_control_;
     std::unique_ptr<BottomBoard> bottom_board_;
     std::unique_ptr<TopBoard> top_board_;
-    std::unique_ptr<device::RemoteControl> remote_control_;
 
     std::shared_ptr<Command> command_;
     uint32_t cmd_tick_ = 0;

@@ -12,6 +12,8 @@
 #include "component_fixture.hpp"
 #include "controller/chassis/deformable_joint_controller.cpp"
 #include "hardware/device/lk_motor.hpp"
+#include "hardware/device/supercap.hpp"
+#include "debug/value_collector.cpp"
 #include "identification/deformable_current_sweep.cpp"
 
 namespace {
@@ -28,6 +30,8 @@ class MockHardware : public Component {
 public:
     MockHardware()
         : command_(create_partner_component<Command>("mock_command", *this)) {
+        supercap_ = std::make_unique<rmcs_core::hardware::device::Supercap>(*this, *command_, true);
+        EXPECT_EQ(supercap_->generate_command().data, 0);
         register_output("/remote/switch/left", left, rmcs_msgs::Switch::UNKNOWN);
         register_output("/remote/switch/right", right, rmcs_msgs::Switch::UNKNOWN);
         for (std::size_t i = 0; i < 4; ++i) {
@@ -58,16 +62,21 @@ private:
     class Command : public Component {
     public:
         explicit Command(MockHardware& owner)
-            : owner_(owner) {}
+            : owner_(owner) {
+            register_output("/chassis/joint_command_time_s", command_time_, 0.0);
+        }
         void update() override {
             for (std::size_t i = 0; i < 4; ++i)
                 owner_.packets[i] = owner_.motors[i]->generate_command();
+            *command_time_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
         }
 
     private:
         MockHardware& owner_;
+        OutputInterface<double> command_time_;
     };
     std::shared_ptr<Command> command_;
+    std::unique_ptr<rmcs_core::hardware::device::Supercap> supercap_;
 };
 
 class SweepSink : public Component {
@@ -78,29 +87,30 @@ public:
         for (std::size_t i = 0; i < 4; ++i) {
             register_input(prefix(i) + "/target_physical_angle", target[i]);
             register_input(prefix(i) + "/control_current_raw", command[i]);
+            register_input(prefix(i) + "/target_torque_proxy", target_torque[i]);
+            register_input(prefix(i) + "/command_torque_proxy", command_torque[i]);
+            register_input(prefix(i) + "/physical_torque_proxy", physical_torque[i]);
         }
     }
     void update() override {}
     InputInterface<bool> active;
     InputInterface<double> stage;
     std::array<InputInterface<double>, 4> target, command;
+    std::array<InputInterface<double>, 4> target_torque, command_torque, physical_torque;
 };
 
 rclcpp::NodeOptions sweep_options() {
     rclcpp::NodeOptions options;
     options.automatically_declare_parameters_from_overrides(true);
     options.parameter_overrides(
-        {{"angles_deg", std::vector<double>{60.0}},
-         {"amplitudes_raw", std::vector<double>{128.0}},
-         {"current_to_physical_direction", std::vector<double>{-1, -1, -1, -1}},
-         {"min_angle_deg", 17.0},
-         {"max_angle_deg", 75.0},
+        {{"min_angle_deg", 59.0},
+         {"max_angle_deg", 61.0},
          {"condition", "suspended"},
-         {"settle_time_s", 0.003},
-         {"chirp_duration_s", 0.03},
-         {"validation_duration_s", 0.03},
-         {"probe_ramp_s", 0.005},
-         {"max_update_gap_s", 1.0}});
+         {"move_speed_rad_s", 20.0},
+         {"slow_duration_s", 0.04}, {"fast_duration_s", 0.03},
+         {"ultra_fast_frequency_hz", 1.0}, {"ultra_fast_duration_s", 0.03},
+         {"slow_start_frequency_hz", 1.0}, {"slow_end_frequency_hz", 2.0},
+         {"fast_start_frequency_hz", 2.0}, {"fast_end_frequency_hz", 4.0}});
     return options;
 }
 
@@ -134,9 +144,26 @@ TEST(DeformableCurrentSweep, WholeGraphPairsRunsStopsResetsAndCanRestart) {
             servos[i] = std::make_unique<DeformableJointController>(servo_options(i));
         }
         SweepSink sink;
-        std::array<Component*, 7> roots{
+        Component::initializing_component_name = "mock_collector";
+        rclcpp::NodeOptions collector_options;
+        collector_options.automatically_declare_parameters_from_overrides(true);
+        const auto csv_path = std::filesystem::temp_directory_path() /
+            ("rmcs_mock_collector_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".csv");
+        const auto run_path = [&](int run) {
+            return csv_path.parent_path() / (csv_path.stem().string() + "_run" + std::to_string(run) + ".csv.status.json");
+        };
+        collector_options.parameter_overrides({
+            {"experiment_mode", true}, {"csv_path", csv_path.string()},
+            {"signals", std::vector<std::string>{"/identification/host_time_s", "/identification/stage",
+                "/chassis/left_front_joint/current_raw", "/chassis/left_front_joint/torque",
+                "/chassis/left_front_joint/command_current_raw",
+                "/chassis/left_front_joint/torque_per_current_raw",
+                "/chassis/left_front_joint/command_torque_proxy"}},
+            {"write_interval", 5}, {"flush_interval", 1000}});
+        rmcs_core::debug::ValueCollector collector{collector_options};
+        std::array<Component*, 8> roots{
             &hardware,       &sweep, servos[0].get(), servos[1].get(), servos[2].get(),
-            servos[3].get(), &sink};
+            servos[3].get(), &sink, &collector};
         auto components = rmcs_executor::Executor::with_partners(roots);
         const auto order = rmcs_executor::Executor::ordered(components);
         for (auto* component : order)
@@ -148,6 +175,7 @@ TEST(DeformableCurrentSweep, WholeGraphPairsRunsStopsResetsAndCanRestart) {
         };
         tick();
         EXPECT_FALSE(*sink.active);
+        *hardware.left = *hardware.right = rmcs_msgs::Switch::MIDDLE;
         ASSERT_TRUE(sweep.request_start());
         tick();
         ASSERT_TRUE(*sink.active);
@@ -157,6 +185,8 @@ TEST(DeformableCurrentSweep, WholeGraphPairsRunsStopsResetsAndCanRestart) {
         EXPECT_FALSE(*sink.active);
         for (const auto& packet : hardware.packets)
             EXPECT_EQ(std::bit_cast<int16_t>(packet.data[2]), 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        EXPECT_TRUE(std::filesystem::exists(run_path(1)));
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         ASSERT_TRUE(sweep.request_start());
         tick();
@@ -166,20 +196,68 @@ TEST(DeformableCurrentSweep, WholeGraphPairsRunsStopsResetsAndCanRestart) {
         EXPECT_FALSE(*sink.active);
         for (const auto& packet : hardware.packets)
             EXPECT_EQ(std::bit_cast<int16_t>(packet.data[2]), 0);
-        *hardware.left = *hardware.right = rmcs_msgs::Switch::UNKNOWN;
+        *hardware.left = *hardware.right = rmcs_msgs::Switch::MIDDLE;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         ASSERT_TRUE(sweep.request_start());
         tick();
         ASSERT_TRUE(*sink.active);
-        bool saw_probe = false;
+        bool saw_motion_command = false;
+        int run_ticks = 0;
         for (int k = 0; k < 1000 && *sink.active; ++k) {
-            saw_probe |= std::abs(*sink.command[0]) > 1.0;
+            saw_motion_command |= std::abs(*sink.command[0]) > 1.0;
+            for (std::size_t i = 0; i < 4; ++i)
+                EXPECT_NEAR(*sink.target_torque[i], *sink.command[i] * 0.1740234375, 1e-9);
             tick();
+            ++run_ticks;
         }
-        EXPECT_TRUE(saw_probe);
+        EXPECT_TRUE(saw_motion_command);
         EXPECT_EQ(*sink.stage, 5.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::ifstream status{run_path(3)};
+        std::string status_text;
+        std::getline(status, status_text);
+        EXPECT_TRUE(status_text.contains("\"completed\":true"));
+        const auto csv = csv_path.parent_path() / (csv_path.stem().string() + "_run3.csv");
+        std::ifstream samples{csv};
+        std::string line;
+        std::getline(samples, line);
+        int rows = 0;
+        bool saw_final = false;
+        while (std::getline(samples, line)) {
+            std::istringstream row{line};
+            std::array<double, 7> values;
+            for (auto& value : values) {
+                std::string cell;
+                std::getline(row, cell, ',');
+                value = std::stod(cell);
+            }
+            EXPECT_NEAR(values[6], values[4] * values[5], 1e-10);
+            saw_final |= values[1] == 5.0;
+            ++rows;
+        }
+        EXPECT_TRUE(saw_final);
+        EXPECT_LE(rows, run_ticks / 5 + 3);
+        EXPECT_GT(rows, 2);
         for (const auto& packet : hardware.packets)
             EXPECT_EQ(std::bit_cast<int16_t>(packet.data[2]), 0);
+        *hardware.left = *hardware.right = rmcs_msgs::Switch::DOWN;
+        tick();
+        *hardware.left = *hardware.right = rmcs_msgs::Switch::MIDDLE;
+        tick();
+        EXPECT_TRUE(*sink.active);
+        for (int k = 0; k < 1000 && *sink.active; ++k)
+            tick();
+        EXPECT_EQ(*sink.stage, 5.0);
+        for (int k = 0; k < 10; ++k)
+            tick();
+        EXPECT_FALSE(*sink.active); // Holding middle does not restart completed run.
+        *hardware.left = *hardware.right = rmcs_msgs::Switch::DOWN;
+        tick();
+        *hardware.left = *hardware.right = rmcs_msgs::Switch::MIDDLE;
+        tick();
+        EXPECT_TRUE(*sink.active);
+        sweep.request_stop();
+        tick();
     }
     rclcpp::shutdown();
 }

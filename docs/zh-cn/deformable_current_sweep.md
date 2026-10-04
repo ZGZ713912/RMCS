@@ -1,149 +1,120 @@
-# deformable 关节 ADRC 与电流计数扫频
+# deformable 四腿同步角度扫频与 real2sim 数据
 
-deformable 的四个 joint 继续使用 TD + ESO + NLESF 的 ADRC。正常运行的四份
-`deformable-infantry-omni{,-b,-c,-rl}.yaml` 和新扫频配置均使用 `output_domain: current_raw`。
-关节控制链现在是：
+## 实验流程
 
-```text
-physical_angle / physical_velocity
-  -> ADRC -> servo current counts
-  -> 加扫频探针 -> 最终 CAN 计数饱和/取整 -> 0xA1
-```
+悬空、落地均四条腿同步运动，使用车辆原 `DeformableJointController` ADRC 和参数。
+不再固定角度叠加电流探针，不再逐腿扫。DR16 左右双中开始一次实验：
 
-正常配置没有探针，ADRC 直接输出 `/chassis/<joint>/control_current_raw`。
-实验配置使用独立 `DeformableCurrentSweep` 插件，ADRC 输出 `/servo_current_raw`，
-插件的 command partner 相加、编码并记录。旧通用 `SweptFrequencyController` 和
-`fit_sweep_graybox.py` 保留给使用其他协议/已有扭矩标定的实验；deformable 应使用这里的新配置。
+1. 从当前角度以 0.08 rad/s 将参考移动到 min_angle。
+2. 慢扫 120 秒，角度 chirp 频率从 0.02 Hz 到 0.06 Hz。
+3. 返回 min_angle，再快扫 60 秒，频率从 0.06 Hz 到 0.12 Hz。
+4. 返回 min_angle，增加极快段：1 Hz，即每 1 秒 min→max→min，连续 10 秒。
+5. 返回 min_angle，完成、输出归零、CSV 关盘。
 
-## 已移除的限幅与保留的边界
+极快段使用相同余弦角度轨迹和解析速度，仅提高运动频率，四腿仍同步；
+`ultra_fast_frequency_hz: 1.0`、`ultra_fast_duration_s: 10.0` 可在两份 YAML 调整。
+这是目标往返周期，实际角度/速度能否跟上应根据记录判断。
+17–75°范围下目标峰值速度约 3.18 rad/s，峰值加速度约 19.98 rad/s²。
+可比较最终指令 torque 代理与反馈 torque 代理的时序来估计有效延迟；
+角度参考到实测角度的滞后还包含 ADRC 和机械响应，不能直接当成电机出力延迟。
 
-- 当前模式不再读取、应用 NLESF 的 `u_min/u_max` 或末级的 `output_min/output_max`。
-  四份正常配置和两份实验配置均已删除这些参数。也不按 25 N·m 额定峰值裁剪扫频输出。
-- `controller_output_to_current_raw: 5.74635241301908` 保留旧配置**未饱和时**的 CAN
-  计数增益，便于沿用现有 `b0/k1/k2/kt`。它只是历史控制单位到计数的缩放，不能作为
-  已标定的 N·m 系数。之后更改厂家 Kt 不会改变这个原始计数控制路径。
-- ESO 使用上一条 `/command_current_raw` 除以该缩放，包含探针、取整和最后饱和的结果。
-  它不再用未施加的 ADRC 请求代替实际编码指令。这里的“实际”是已准备的 CAN 数据，
-  并不证明 USB/CAN 总线成功交付。
-- 唯一默认的输出幅值边界是协议 `±2048` 计数。`max_current_slew_raw_s: 0.0`
-  表示没有额外电流变化率限制。需要较低电流边界时，可明确设置计数单位的
-  `max_command_current_raw` 和硬件 `joint_current_command_limit`；二者均不依赖 N·m。
-- 物理角度、速度、温度、反馈超时、异常计数、执行周期中断和定位/稳定超时仍会停止实验。
-  默认物理角度边界取**当前源 YAML** 的 17–75°。探针阶段允许相对保持点偏移 0.14 rad，
-  并受上述全局边界约束。TD 的轨迹约束和 ESO 的数值状态约束不属于扭矩限幅。
+两遍参考角度都覆盖源配置的 min_angle–max_angle（当前 17–75°）：
+`q_ref = min + (max-min)/2 * (1-cos(phase))`。
+速度参考是这条曲线的解析导数。四路目标完全同相，实际跟踪由各自 ADRC 决定。
+初始化从各腿当前位置平滑定位，因此定位阶段各腿参考可能不同，chirp 阶段相同。
+轨迹范围约束的是参考，不是实际测量角度。按用户要求没有角度/温度/超时等自动中止。
+离开双中、双下或手动 stop 可停止。完成后保持双中不重启，重新双中才启动下一次。
 
-`/raw_current` 是 CAN 帧里的 iq 原始值；`/current_raw` 已按 `set_reversed()` 变换至
-驱动配置坐标。`/command_current_raw` 使用相同坐标。当前四个关节的物理腿角为
-`73.31° - motor_angle`，所以电流到物理角的方向为 `-1`。实验使用物理腿角，不使用 RL 缩放角。
-原 `/torque` 仍是未标定的电流换算代理；既不参与该扫频控制，也不作为本拟合的 N·m 标签。
-旧策略的观测接口没有在此改成计数，使用新模型训练/部署时需同步更新策略契约。
+阶段：idle=0，初始定位=1，慢扫后返回=2，慢扫=3，快扫后返回=4，完成=5，停止=6，
+快扫=7，极快扫=8，最终返回=9。
 
-## 配置、开始与停止
+## 编译、同步、自动取回
 
-预置配置：
-
-- `rmcs_ws/src/rmcs_bringup/config/deformable-current-sweep-suspended.yaml`：悬空条件。
-- `rmcs_ws/src/rmcs_bringup/config/deformable-current-sweep-grounded.yaml`：落地条件。
-
-它们复制当前 RL YAML 的实际硬件插件、板卡序列号、标定和四路 ADRC 增益，仅装配关节实验链。
-其他电机的未绑定输入生成零/停机指令。修改源配置后重新生成：
+在开发 Docker 中运行：
 
 ```bash
-python3 .script/identification/prepare_current_sweep.py --condition suspended
-python3 .script/identification/prepare_current_sweep.py --condition grounded
+build-rmcs --packages-select rmcs_core rmcs_bringup
+sync-remote
 ```
 
-用 `--source` 选择 A/B/C 车辆的实际源配置；不要跨车复用板卡序列号。
-`--angles-deg` 和 `--amplitudes-raw` 可以直接设置覆盖点和计数幅值，不需要扭矩常数。
-
-默认程序访问 65、50、35、25、35、50、65°，每点使用 128 和 384 计数，
-逐关节施加 20 s 的 0.2–8 Hz chirp，稳定后再施加 6 s 正负阶跃作为独立验证。
-全部有 56 组 chirp/验证块，含稳定和移动约需半小时；实际时长取决于 ADRC 能否稳定及温度。
-幅值、频率、角度和温度覆盖由真实记录确认，默认配置本身不证明足够激励。
-
-在用户确认实验布置、完成正常编译/安装后选择相应配置启动进程。例如：
+`sync-remote` 同步安装产物。同步完成后重启车上 RMCS。
+选用 `deformable-current-sweep-suspended` 或 `deformable-current-sweep-grounded`。
+DR16 双中后自动采集，完成后由用户 SCP 到电脑。例如：
 
 ```bash
-ros2 launch rmcs_bringup rmcs.launch.py robot:=deformable-current-sweep-suspended
+scp remote:/tmp/deformable_angle_sweep_suspended_实际时间_run1.csv* ./data/identification/
+```
+
+如果需要可选的自动取回，可以单独运行：
+
+```bash
+python3 .script/identification/collect_current_sweep.py --condition all --watch --raw-only
+```
+
+文件保存到电脑绑定挂载的 `RMCS/data/identification/`，机器人原文件保留。
+后台关盘后原子生成 `.csv.status.json`，取回程序等待它出现，再 SCP CSV、元数据与状态。
+不会复制正在写的半个文件。每个 run 一个文件，`.received` 标记已取回。
+角度扫频自动生成 `.summary.json` 统计慢/快两遍的角度、速度、torque 与饱和范围。
+
+状态查询：
+
+```bash
 ros2 service call /identification/status std_srvs/srv/Trigger '{}'
-ros2 service call /identification/start std_srvs/srv/Trigger '{}'
+ros2 service call /identification/collector_status std_srvs/srv/Trigger '{}'
 ros2 service call /identification/stop std_srvs/srv/Trigger '{}'
 ```
 
-进程启动和进程重启都不会自动开始实验；start 只是排队，状态服务给出反馈检查结果、阶段和文件路径。
-`require_remote_enable: false` 允许无遥控器的显式 start，遥控器双下仍会复位并归零。
-stop、故障、完成均将四路电流请求归零并清空 ADRC 状态；重新开始须再次显式 start。
-停止时后台线程自行排空 CSV 队列，不等待磁盘写完才准备零电流帧。
+## ValueCollector 与 CSV 数据
 
-本次代码修改未在真车上启动、部署或自动运行上述命令。
+两份配置启用 `rmcs_core::debug::ValueCollector -> value_collector`，参数为：
 
-## 采样与数据有效性
-
-每次开始创建 `/tmp/deformable_current_sweep_<condition>_<host-time>.csv`，并生成两个 sidecar：
-
-- `.csv.json`：计数单位、关节顺序、方向、工况、生成时的硬件/ADRC/扫频参数快照。
-  手工修改或启动时覆盖配置后，应重新生成/保存实验配置，避免快照与实际设置不一致。
-- `.csv.status.json`：后台写完后生成；包含完整完成标志、写入失败及丢行数量。
-
-CSV 同时保存四个关节的物理角/速度、iq 计数、温度、反馈序号及接收时间、
-上一条已编码电流/指令序号/准备时间、ADRC 请求、探针、求和请求、最终计数、
-幅值/变化率饱和标志、物理参考和机体 roll/pitch。
-
-阶段编号为 idle=0、move=1、settle=2、chirp=3、validation=4、complete=5、aborted=6。
-速度/位置辨识仅使用 3，独立验证仅使用 4。CSV 行率与反馈率不同：四个关节 CAN 分时发送，
-重复反馈必须按序号去重。时间戳来自主机单调时钟；准备时间不是总线发送时间，接收时间不是
-电机内部采样时间。拟合得到的延迟包含主机传输与反馈链的影响，精度受采样周期制约。
-
-队列丢行、写盘失败会中止实验；缺失 status sidecar 的文件可能仍在写入或已异常中断。
-正常拟合要求实验完整完成、无丢行、无写入失败。`--allow-partial` 只生成诊断结果，
-始终不能获得 `training_ready: true`。
-
-## 拟合和 real2sim 使用边界
-
-```bash
-python3 .script/identification/fit_current_sweep.py /tmp/实际文件.csv --output /tmp/suspended-model.json
+```yaml
+experiment_mode: true
+csv_path: /tmp/deformable_angle_sweep_<condition>_<timestamp>.csv
+write_interval: 5
+flush_interval: 1000
 ```
 
-需要 NumPy、SciPy；配置生成/配置测试另需 PyYAML。拟合按关节和工况输出模型 JSON 和同名 NPZ，
-不会把悬空与落地混成一种惯量。它执行：
+1000 Hz 控制、每 5 周期一行，约 200 Hz CSV；每 1000 行 flush，结束必定关盘。
+实验模式用后台写线程，保持 ValueCollector 的 signals 接口。写失败/丢行在 status 中记录。
 
-1. 按反馈序号去重，按反馈接收时间重采样，剔除过时、饱和和变化率受限数据；
-   差分窗口不跨角度/幅值/阶段切换或坏样本。
-2. 使用实际准备指令的时间序列拟合主机延迟、iq 一阶响应、增益与偏置；独立阶跃段检查自由运行预测。
-3. 使用实测 iq 和物理状态拟合等效角加速度：
-   `q_dd = c0*i + c1*i*(q-q0) + c2*i*abs(v) + c3*v + c4*tanh(10*v) + c5*sin(q) + c6*cos(q) + c7`。
-   检查双向探针/速度、角度跨度、矩阵秩/条件数、独立加速度预测与 0.5 s 位置/速度滚动预测。
+每个 `/chassis/<joint>_joint` 的列：
 
-NPZ 中训练/验证按阶段严格分开，列名随文件导出，标签是 `acceleration_rad_s2`，没有伪造的
-`torque_Nm`。无法辨识或验证失败会写明原因，并以退出码 2 和 `training_ready: false` 阻止直接使用。
-每个模型记录电流/角度/速度/温度/频率覆盖范围。闭环最小二乘仍可能有噪声偏差，验证通过也只支持
-实际覆盖的工况；温度、负载、接触和机构耦合超出覆盖时须扩展实验和模型。
+| 列后缀 | 定义 |
+|---|---|
+| physical_angle / physical_velocity | 物理腿角 rad、rad/s |
+| rl_angle / rl_velocity | 车辆标定的 RL 缩放坐标 |
+| target_physical_angle / target_physical_velocity | 同步轨迹目标角度、解析目标速度 |
+| torque | 原驱动电流换算 torque 代理，电机配置坐标，不是真实测力 |
+| torque_per_current_raw | 电机配置坐标下每个方向修正电流计数的代理 Nm 系数 |
+| target_torque_proxy | ADRC 请求电流 × 上述系数，尚未按 CAN 协议限幅/取整 |
+| command_torque_proxy | 最终编码 CAN 电流 × 上述系数，与本行 command_current_raw 对齐 |
+| physical_torque_proxy | `-torque`，当前物理腿角与电机坐标方向相反 |
+| target_physical_torque_proxy / command_physical_torque_proxy | 上述请求/最终 torque 代理取负，物理腿角坐标 |
+| current_raw / raw_current | 配置方向电流计数 / CAN 原始 iq 计数 |
+| servo_current_raw / control_current_raw | ADRC 请求 / 送给硬件的请求计数（无探针） |
+| command_current_raw / command_limited | 最终准备发送的 CAN 计数 / 编码限幅标志 |
+| temperature | 摄氏温度 |
+| feedback_sequence / feedback_time_s / feedback_age_s | 反馈序号、主机接收单调时间、反馈年龄 |
+| command_sequence / command_prepare_time_s | 指令序号、主机准备 CAN 包时间 |
 
-`.script/identification/current_actuator_model.py` 提供读取与计数响应模拟：
+MG5010Ei36 当前代理系数：`33/2048 * 0.3 * 36 = 0.1740234375` Nm/count。
+这些 Nm 都是厂家常数定义的估算单位，既不是校准结果，也不是输出轴实测力矩。
 
-- `step_current(command_raw, dt)` 模拟量化、有效延迟及 iq 响应。
-- `acceleration(physical_angle, physical_velocity, iq_raw)` 预测已覆盖状态的等效物理角加速度。
-- `equivalent_simulation_torque(..., simulation_inertia, passive_simulation_torque)` 在显式提供
-  该坐标下的等效惯量与被动/接触项后计算 `J_sim * q_dd - tau_passive_sim`。
-  这是匹配加速度所需的**仿真等效扭矩**，不是测得的真实输出轴扭矩。闭链、多体耦合须使用对应的
-  完整动力学映射，不能把一个电机裸转子的标称惯量当成整个机构惯量。
+公共列为 host_time_s、elapsed_s、run、stage、frequency_hz、actuation_active、DR16 左右状态，
+以及机体 roll/pitch。host_time_s 在硬件命令准备后采集，浮点精度 17 位。
 
-如果仿真使用 RL 缩放角而不是物理腿角，须先用车辆标定做位置、速度、加速度和广义力变换：
-`q_rl = k*(alpha_high-alpha)`，`k=q_rl_max/(alpha_high-alpha_low)`；
-`q_rl_dd = -k*alpha_dd`，广义力满足 `tau_rl = -tau_alpha/k`。
-被动重力/接触项必须与该坐标一致，避免在拟合响应和仿真中重复加重力。
+## RL real2sim 使用
 
-没有独立外力、惯量或机械力矩标定时，扫描运动可以辨识 `Kt/J` 一类等效关系，无法唯一拆出真实
-`Kt` 与机构惯量，更无法仅凭“用手卡住”得到绝对 N·m。新流程让 real2sim 不依赖当前错误的 `/torque`
-值；真实辨识参数和 RL 改善效果仍需用户实际采集与验证。
+原始 CSV 提供“目标角/速度 → ADRC 目标 torque → 最终指令 → 反馈 torque → 实际角/速度”链。
+可辨识有效指令延迟、响应时间、电流/torque 代理跟踪、摩擦/阻尼、姿态负载和快慢轨迹迟滞。
+仿真使用同一角度轨迹与 ADRC，优化角度、速度和代理 torque 的差异，参数按工况分别拟合。
+同步四腿数据是耦合整机响应，不能解释成四个独立单关节模型。
 
-## 已有验证与限制
+准备时间不是总线实际发送时间、接收时间不是电机内部采样时间；推得的是整条链的有效延迟。
+反馈应按序号去重。饱和、丢行和过时数据需离线标注；跑完不等于参数已识别。
+旧 `fit_current_sweep.py`、静载表脚本针对旧电流探针 schema 1，不能用于新的角度 schema 2。
+连续角度扫频没有静止保持网格，若要静态 torque 表，应另外采集静态保持数据。
 
-离线 C++ 测试检查 CAN 计数与方向、协议边界、反馈帧类别/时间戳、ADRC 两层旧限幅移除、
-ESO 已编码输入、完整插件与四路 ADRC 的无环装配、显式开始/停止、双下复位和重新开始。
-Python 合成系统测试覆盖指令延迟/一阶动态、重复反馈、饱和剔除、模型辨识、独立验证、
-工况/覆盖范围拒绝、未完成/丢行拒绝及源配置一致性。这些都是软件和合成数据结果。
-
-本次三个硬件源文件、ADRC、新扫频插件目标文件编译通过。完整 `rmcs_core` 构建在未改动的
-`px4_vision_bridge.cpp` 因环境缺失 `mavlink/v2.0/common/mavlink.h` 中止，尚未完成完整链接/安装，
-也没有真车数据或真实 RL 训练验证。
+硬件实验禁用超级电容，不要求裁判状态/充电功率接口。A/B/C USB 对象先销毁并等待回调退出，
+再销毁电机、IMU、监控和遥控器，修复启动失败时的退出段错误。

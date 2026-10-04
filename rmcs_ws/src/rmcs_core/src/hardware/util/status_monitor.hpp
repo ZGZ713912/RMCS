@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <format>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,16 +13,19 @@ namespace rmcs_core::hardware {
 class StatusMonitor {
 public:
     void tick(const std::string& channel_name, const std::string& item) {
+        const std::lock_guard lock{mutex_};
         if (enabled_)
             status_[channel_name].insert(item);
     }
 
     void tick(const std::string& channel_name, std::uint32_t id) {
+        const std::lock_guard lock{mutex_};
         if (enabled_)
             status_[channel_name].insert(std::format("{:#x}", id));
     }
 
     [[nodiscard]] auto text() const -> std::vector<std::string> {
+        const std::lock_guard lock{mutex_};
         auto strings = std::vector<std::string>{};
         for (const auto& [channel, items] : status_) {
             auto items_content = std::string{"| "};
@@ -32,9 +36,13 @@ public:
         return strings;
     }
 
-    void set_enable(bool enabled) noexcept { enabled_ = enabled; }
+    void set_enable(bool enabled) noexcept {
+        const std::lock_guard lock{mutex_};
+        enabled_ = enabled;
+    }
 
 private:
+    mutable std::mutex mutex_;
     std::unordered_map<std::string, std::unordered_set<std::string>> status_;
     bool enabled_ = true;
 };

@@ -57,9 +57,22 @@ def load_dataset(path: Path, allow_partial: bool = False) -> Dataset:
                     "command_prepare_time_s", "command_current_raw", "command_limited",
                     "current_clipped", "current_rate_limited", "sweep_probe_current_raw")
         required.update(f"{p}/{s}" for p in prefixes for s in suffixes)
-        if not reader.fieldnames or required.difference(reader.fieldnames):
+        fields = set(reader.fieldnames or [])
+        if "/identification/host_time_s" in fields:
+            fields.update({"schema_version", "host_time_s", "stage", "point_index", "active_joint",
+                           "actuation_active", "amplitude_raw", "frequency_hz", "queue_dropped"})
+        if not reader.fieldnames or required.difference(fields):
             raise ValueError("Missing current-sweep columns: " + str(required.difference(reader.fieldnames or [])))
         for row in reader:
+            if "/identification/host_time_s" in row:
+                aliases = {"host_time_s": "host_time_s", "elapsed_s": "elapsed_s",
+                           "run_id": "run", "stage": "stage", "point_index": "point",
+                           "active_joint": "joint", "amplitude_raw": "amplitude_raw",
+                           "frequency_hz": "frequency_hz", "actuation_active": "actuation_active",
+                           "queue_dropped": "dropped_samples"}
+                row.update({key: row["/identification/" + value] for key, value in aliases.items()
+                            if "/identification/" + value in row})
+                row["schema_version"] = "1"
             host = float(row["host_time_s"])
             if not np.isfinite(host) or host <= previous_host or float(row["schema_version"]) != 1:
                 raise ValueError("Nonmonotonic host timestamps or mixed CSV schema")
@@ -86,32 +99,36 @@ def load_dataset(path: Path, allow_partial: bool = False) -> Dataset:
             if stage not in (3, 4):
                 continue
             j = int(float(row["active_joint"]))
-            if j not in range(4):
+            simultaneous = metadata.get("excitation_mode") == "simultaneous"
+            if j == -1 and not simultaneous:
+                raise ValueError("All-joint rows require simultaneous excitation metadata")
+            if j not in range(4) and j != -1:
                 raise ValueError("Invalid active joint")
-            p = prefixes[j]
-            quality[j]["eligible_rows"] += 1
-            sequence = float(row[p + "/feedback_sequence"])
-            if not np.isfinite(sequence) or sequence < last_feedback[j]:
-                raise ValueError("Invalid/reset feedback sequence")
-            if sequence == last_feedback[j]:
-                quality[j]["duplicate_feedback"] += 1
-                continue
-            last_feedback[j] = sequence
-            t = float(row[p + "/feedback_time_s"])
-            q, v, iq, temp = (float(row[p + "/" + s]) for s in
-                               ("physical_angle", "physical_velocity", "current_raw", "temperature"))
             # Conservative rejection includes other joints reaching final count saturation.
             clipped = any(float(row[k + "/" + s]) != 0 for k in prefixes for s in
                           ("command_limited", "current_clipped", "current_rate_limited"))
             clipped |= any(abs(float(row[k + "/command_current_raw"])) >=
                            float(metadata["max_command_current_raw"]) for k in prefixes)
-            valid = (np.all(np.isfinite([t, q, v, iq, temp])) and sequence >= 1
-                     and 0 <= host - t <= float(metadata.get("max_feedback_age_s", 0.05))
-                     and float(row["actuation_active"]) == 1 and not clipped)
-            quality[j]["rejected_samples"] += int(not valid)
-            samples[j].extend((t, q, v, iq, temp, float(row["point_index"]), stage,
-                               float(row["amplitude_raw"]), float(row["frequency_hz"]),
-                               float(row[p + "/sweep_probe_current_raw"]), float(valid)))
+            for joint in (range(4) if j == -1 else (j,)):
+                p = prefixes[joint]
+                quality[joint]["eligible_rows"] += 1
+                sequence = float(row[p + "/feedback_sequence"])
+                if not np.isfinite(sequence) or sequence < last_feedback[joint]:
+                    raise ValueError("Invalid/reset feedback sequence")
+                if sequence == last_feedback[joint]:
+                    quality[joint]["duplicate_feedback"] += 1
+                    continue
+                last_feedback[joint] = sequence
+                t = float(row[p + "/feedback_time_s"])
+                q, v, iq, temp = (float(row[p + "/" + s]) for s in
+                    ("physical_angle", "physical_velocity", "current_raw", "temperature"))
+                valid = (np.all(np.isfinite([t, q, v, iq, temp])) and sequence >= 1
+                         and 0 <= host - t <= float(metadata.get("max_feedback_age_s", 0.05))
+                         and float(row["actuation_active"]) == 1 and not clipped)
+                quality[joint]["rejected_samples"] += int(not valid)
+                samples[joint].extend((t, q, v, iq, temp, float(row["point_index"]), stage,
+                    float(row["amplitude_raw"]), float(row["frequency_hz"]),
+                    float(row[p + "/sweep_probe_current_raw"]), float(valid)))
     return Dataset(metadata, status,
                    [np.array(a).reshape(-1, len(SAMPLE_FIELDS)) for a in samples],
                    [np.array(a).reshape(-1, 2) for a in commands], quality)
@@ -252,11 +269,11 @@ def fit_joint(dataset: Dataset, joint: int, window: int = 11, max_delay: float =
         raise ValueError("Require chirp training and separate held-out step blocks")
     a, v = np.concatenate(train), np.concatenate(validation)
     span = float(np.ptp(a[:, 1]))
-    if span < 0.25 or np.std(a[:, 3]) < 16 or np.ptp(a[:, 2]) < 0.02:
+    if span < 0.25 or np.std(a[:, 3]) < 2 or np.ptp(a[:, 2]) < 0.02:
         raise ValueError("Insufficient angle/current/velocity excitation; collect more states")
     if not np.any(a[:, 2] < -0.01) or not np.any(a[:, 2] > 0.01):
         raise ValueError("Require both physical directions")
-    if not np.any(a[:, 9] < -16) or not np.any(a[:, 9] > 16):
+    if not np.any(a[:, 9] < -2) or not np.any(a[:, 9] > 2):
         raise ValueError("Missing independent probe excitation")
     center = float(np.mean(a[:, 1]))
     x = features(a[:, 1], a[:, 2], a[:, 3], center)
@@ -289,6 +306,8 @@ def fit_joint(dataset: Dataset, joint: int, window: int = 11, max_delay: float =
                 "amplitudes_raw": np.unique(a[:, 7]).tolist(),
                 "frequency_hz": [float(np.min(a[:, 8])), float(np.max(a[:, 8]))]}
     model = {"joint": JOINTS[joint], "condition": dataset.metadata["condition"],
+              "excitation_mode": dataset.metadata.get("excitation_mode", "individual"),
+              "model_scope": "synchronized four-leg motion only" if dataset.metadata.get("excitation_mode") == "simultaneous" else "individual joint excitation",
              "training_ready": bool(validated), "absolute_torque_identified": False,
              "feature_names": list(FEATURES), "coefficients": coefficient.tolist(),
              "angle_center_rad": center, "output_unit": "rad/s^2",
@@ -299,7 +318,21 @@ def fit_joint(dataset: Dataset, joint: int, window: int = 11, max_delay: float =
              "transport": transport, "coverage": coverage,
              "train_samples": len(a), "validation_samples": len(v),
              "feedback_period_s": float(np.median(np.concatenate([np.diff(b[:, 0]) for b in segments]))),
-             "quality": dataset.quality[joint]}
+              "quality": dataset.quality[joint]}
+    current_gain = float(coefficient[0])
+    if abs(current_gain) < 1e-12:
+        raise ValueError("Unidentifiable reference-angle current gain")
+    model["mechanical_gap"] = {
+        "coordinate": "physical leg angle",
+        "viscous_acceleration_per_velocity": float(coefficient[3]),
+        "coulomb_acceleration_amplitude": float(coefficient[4]),
+        "friction_transition_velocity_rad_s": 0.1,
+        "viscous_equivalent_current_raw_per_rad_s": float(-coefficient[3] / current_gain),
+        "coulomb_equivalent_current_raw": float(-coefficient[4] / current_gain),
+        "reference_angle_rad": center,
+        "absolute_friction_Nm_identified": False,
+        "interpretation": "local effective friction/current ratios; inertia, Kt and contact remain coupled",
+    }
     # Features/labels describe motion, never fabricated torque labels.
     pack = {"train": a, "validation": v}
     return model, pack

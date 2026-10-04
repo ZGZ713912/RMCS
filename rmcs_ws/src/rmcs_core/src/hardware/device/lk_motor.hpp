@@ -59,6 +59,7 @@ public:
         status_component.register_output(name_prefix + "/raw_angle", raw_angle_output_, 0);
         status_component.register_output(name_prefix + "/velocity", velocity_output_, 0.0);
         status_component.register_output(name_prefix + "/torque", torque_output_, 0.0);
+        status_component.register_output(name_prefix + "/torque_per_current_raw", torque_scale_output_, 0.0);
         status_component.register_output(name_prefix + "/temperature", temperature_output_, 0.0);
         status_component.register_output(name_prefix + "/max_torque", max_torque_output_, 0.0);
         status_component.register_output(name_prefix + "/raw_current", raw_current_output_, kNan);
@@ -172,6 +173,7 @@ public:
         status_current_to_torque_coefficient_ =
             sign * (kProtocolCurrentMax / kRawCurrentMax) * torque_constant * reduction_ratio;
         torque_to_command_current_coefficient_ = 1 / status_current_to_torque_coefficient_;
+        *torque_scale_output_ = sign * status_current_to_torque_coefficient_;
 
         *max_torque_output_ = max_torque();
         feedback_version_.store(0, std::memory_order_relaxed);
@@ -667,6 +669,7 @@ private:
     rmcs_executor::Component::OutputInterface<int64_t> raw_angle_output_;
     rmcs_executor::Component::OutputInterface<double> velocity_output_;
     rmcs_executor::Component::OutputInterface<double> torque_output_;
+    rmcs_executor::Component::OutputInterface<double> torque_scale_output_;
     rmcs_executor::Component::OutputInterface<double> temperature_output_;
     rmcs_executor::Component::OutputInterface<double> max_torque_output_;
     rmcs_executor::Component::OutputInterface<double> raw_current_output_;
