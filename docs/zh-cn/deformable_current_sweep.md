@@ -9,7 +9,9 @@
 2. 慢扫 120 秒，角度 chirp 频率从 0.02 Hz 到 0.06 Hz。
 3. 返回 min_angle，再快扫 60 秒，频率从 0.06 Hz 到 0.12 Hz。
 4. 返回 min_angle，增加极快段：1 Hz，即每 1 秒 min→max→min，连续 10 秒。
-5. 返回 min_angle，完成、输出归零、CSV 关盘。
+5. 仅悬空工况再增加阶跃段：目标在 min/max 间做方波阶跃，每级保持 5 秒，共 3 个周期，
+   用于观察当前 ADRC 参数下电机的最大输出与饱和情况；落地工况跳过该段。
+6. 返回 min_angle，完成、输出归零、CSV 关盘。
 
 极快段使用相同余弦角度轨迹和解析速度，仅提高运动频率，四腿仍同步；
 `ultra_fast_frequency_hz: 1.0`、`ultra_fast_duration_s: 10.0` 可在两份 YAML 调整。
@@ -17,6 +19,14 @@
 17–75°范围下目标峰值速度约 3.18 rad/s，峰值加速度约 19.98 rad/s²。
 可比较最终指令 torque 代理与反馈 torque 代理的时序来估计有效延迟；
 角度参考到实测角度的滞后还包含 ADRC 和机械响应，不能直接当成电机出力延迟。
+
+阶跃段只在悬空 YAML 出现（`step_enable: true`、`step_duration_s: 5.0`、`step_cycles: 3`），
+阶段号 10，四腿目标方波同相同步。阶跃记录里：
+`target_torque_proxy` 是 ADRC 未限幅请求，`command_current_raw`/`command_torque_proxy`
+是最终编码指令，`command_limited` 表示被 ±2048 协议上限截断。
+`target_torque_proxy` 达到 `2048 × torque_per_current_raw` 且 `command_limited=1`
+即为当前参数下电机可输出的最大值（MG5010Ei36 代理系数 0.1740234375，上限约 356.4 代理单位）。
+汇总脚本对 step 段单独输出每关节的饱和占比、峰值电流和峰值 torque 代理。
 
 两遍参考角度都覆盖源配置的 min_angle–max_angle（当前 17–75°）：
 `q_ref = min + (max-min)/2 * (1-cos(phase))`。
@@ -26,7 +36,7 @@
 离开双中、双下或手动 stop 可停止。完成后保持双中不重启，重新双中才启动下一次。
 
 阶段：idle=0，初始定位=1，慢扫后返回=2，慢扫=3，快扫后返回=4，完成=5，停止=6，
-快扫=7，极快扫=8，最终返回=9。
+快扫=7，极快扫=8，最终返回=9，阶跃响应=10（仅悬空）。
 
 ## 编译、同步、自动取回
 

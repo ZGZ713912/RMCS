@@ -32,8 +32,11 @@ def generate(source, condition):
                   "max_angle_deg": float(limits["max_angle"]), "move_speed_rad_s": 0.08,
                   "slow_duration_s": 120.0, "fast_duration_s": 60.0,
                   "slow_start_frequency_hz": 0.02, "slow_end_frequency_hz": 0.06,
-                   "fast_start_frequency_hz": 0.06, "fast_end_frequency_hz": 0.12,
-                   "ultra_fast_frequency_hz": 1.0, "ultra_fast_duration_s": 10.0}}}
+                  "fast_start_frequency_hz": 0.06, "fast_end_frequency_hz": 0.12,
+                  "ultra_fast_frequency_hz": 1.0, "ultra_fast_duration_s": 10.0}}}
+    if condition == "suspended":
+        result["current_sweep"]["ros__parameters"].update(
+            step_enable=True, step_duration_s=5.0, step_cycles=3)
     signals = ["/identification/" + n for n in ("host_time_s", "elapsed_s", "run", "stage",
                "frequency_hz", "actuation_active", "remote_left", "remote_right")]
     for controller, joint in zip(CONTROLLERS, JOINTS):

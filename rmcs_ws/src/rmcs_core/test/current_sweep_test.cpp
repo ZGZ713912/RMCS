@@ -247,4 +247,35 @@ TEST(AngleSweep, UltraFastReferenceCompletesMinMaxMinInOneSecond) {
     sweep.update(start + 2.001, true);
     EXPECT_EQ(sweep.stage(), 5);
 }
+
+TEST(AngleSweep, SuspendedStepResponseUsesSquareWaveAcrossFullRange) {
+    using rmcs_core::controller::identification::AngleSweep;
+    AngleSweep::Config c;
+    c.min_angle = 0.3; c.max_angle = 1.3;
+    c.move_speed = 20.0;
+    c.slow_duration = 0.01; c.fast_duration = 0.01;
+    c.ultra_fast_frequency_hz = 1.0; c.ultra_fast_duration = 0.01;
+    c.step_enable = true; c.step_duration = 0.05; c.step_cycles = 2;
+    AngleSweep sweep{c};
+    ASSERT_TRUE(sweep.start(0.0, {0.3, 0.3, 0.3, 0.3}));
+    double now = 0.0, step_start = -1.0, step_end = -1.0;
+    int step_samples = 0;
+    for (int k = 0; k < 5000 && sweep.active(); ++k) {
+        now += 0.001;
+        sweep.update(now, true);
+        if (sweep.stage() == 10) {
+            if (step_start < 0.0) step_start = now;
+            step_end = now;
+            ++step_samples;
+            for (std::size_t i = 0; i < 4; ++i)
+                EXPECT_TRUE(sweep.angles()[i] == c.min_angle || sweep.angles()[i] == c.max_angle);
+            for (double v : sweep.velocities()) EXPECT_DOUBLE_EQ(v, 0.0);
+        }
+    }
+    EXPECT_EQ(sweep.stage(), 5);
+    EXPECT_GT(step_samples, 0);
+    EXPECT_NEAR(step_end - step_start, c.step_duration * 2 * c.step_cycles, 0.01);
+    for (double v : sweep.velocities()) EXPECT_DOUBLE_EQ(v, 0.0);
+    for (std::size_t i = 0; i < 4; ++i) EXPECT_DOUBLE_EQ(sweep.angles()[i], c.min_angle);
+}
 } // namespace

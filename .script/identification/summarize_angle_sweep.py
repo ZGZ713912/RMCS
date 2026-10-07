@@ -16,19 +16,24 @@ def summarize(path):
     for row in csv.DictReader(path.open()):
         result["rows"] += 1
         stage = int(float(row["/identification/stage"]))
-        if stage not in (3, 7, 8): continue
-        name = {3: "slow", 7: "fast", 8: "ultra_fast"}[stage]
+        if stage not in (3, 7, 8, 10): continue
+        name = {3: "slow", 7: "fast", 8: "ultra_fast", 10: "step"}[stage]
         for joint in JOINTS:
             p = f"/chassis/{joint}_joint/"
             stats = result["passes"].setdefault(name, {}).setdefault(joint, {"samples": 0, "saturated_samples": 0})
             stats["samples"] += 1
             stats["saturated_samples"] += int(float(row[p + "command_limited"]) != 0)
             for signal in ("physical_angle", "physical_velocity", "torque", "target_torque_proxy",
-                           "command_torque_proxy", "target_physical_angle", "current_raw"):
+                           "command_torque_proxy", "target_physical_angle", "current_raw",
+                           "command_current_raw"):
                 value = float(row[p + signal])
                 if not math.isfinite(value): continue
                 limits = stats.setdefault(signal + "_range", [value, value])
                 limits[0] = min(limits[0], value); limits[1] = max(limits[1], value)
+                stats.setdefault(signal + "_peak_abs", 0.0)
+                stats[signal + "_peak_abs"] = max(stats[signal + "_peak_abs"], abs(value))
+            if stats["samples"]:
+                stats["saturated_percent"] = round(100.0 * stats["saturated_samples"] / stats["samples"], 3)
     output = path.with_suffix(".summary.json")
     output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     print(output)

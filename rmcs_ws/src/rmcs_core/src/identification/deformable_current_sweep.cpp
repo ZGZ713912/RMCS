@@ -69,6 +69,9 @@ public:
           << ",\"fast_end_frequency_hz\":" << config_.fast_end_hz
           << ",\"ultra_fast_frequency_hz\":" << config_.ultra_fast_frequency_hz
           << ",\"ultra_fast_duration_s\":" << config_.ultra_fast_duration
+          << ",\"step_enable\":" << (config_.step_enable ? "true" : "false")
+          << ",\"step_duration_s\":" << config_.step_duration
+          << ",\"step_cycles\":" << config_.step_cycles
           << ",\"experiment_config\":" << get_parameter_or("experiment_config_json", std::string{"{}"}) << "}";
         *metadata_ = m.str();
     }
@@ -120,6 +123,9 @@ private:
         c.fast_end_hz = get_parameter("fast_end_frequency_hz").as_double();
         c.ultra_fast_frequency_hz = get_parameter_or("ultra_fast_frequency_hz", 1.0);
         c.ultra_fast_duration = get_parameter_or("ultra_fast_duration_s", 10.0);
+        c.step_enable = get_parameter_or("step_enable", false);
+        c.step_duration = get_parameter_or("step_duration_s", 5.0);
+        c.step_cycles = get_parameter_or("step_cycles", 3);
         return c;
     }
     class Command : public Component {

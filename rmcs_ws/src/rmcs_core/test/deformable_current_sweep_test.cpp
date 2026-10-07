@@ -109,6 +109,7 @@ rclcpp::NodeOptions sweep_options() {
          {"move_speed_rad_s", 20.0},
          {"slow_duration_s", 0.04}, {"fast_duration_s", 0.03},
          {"ultra_fast_frequency_hz", 1.0}, {"ultra_fast_duration_s", 0.03},
+         {"step_enable", true}, {"step_duration_s", 0.01}, {"step_cycles", 1},
          {"slow_start_frequency_hz", 1.0}, {"slow_end_frequency_hz", 2.0},
          {"fast_start_frequency_hz", 2.0}, {"fast_end_frequency_hz", 4.0}});
     return options;
