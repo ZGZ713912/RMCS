@@ -7,7 +7,34 @@ rmcs_executor:
       - rmcs_core::controller::chassis::WheelLegChassisController -> wheel_leg_chassis_controller
       - rmcs_core::controller::identification::WheelLegIdentificationRecorder -> wheel_leg_identification_recorder
 
+      - rmcs_core::debug::ValueCollector -> value_collector
       - rmcs_core::broadcaster::ValueBroadcaster -> value_broadcaster
+
+value_collector:
+  ros__parameters:
+    csv_path: "/tmp/wheel_leg_<timestamp>.csv"
+    signals:
+      - /wheel_leg/imu/pitch
+      - /wheel_leg/imu/yaw
+      - /wheel_leg/imu/pitch_velocity
+      - /wheel_leg/left_hip_joint/angle
+      - /wheel_leg/left_hip_joint/velocity
+      - /wheel_leg/left_hip_joint/torque
+      - /wheel_leg/left_knee_joint/angle
+      - /wheel_leg/left_knee_joint/velocity
+      - /wheel_leg/left_knee_joint/torque
+      - /wheel_leg/right_hip_joint/angle
+      - /wheel_leg/right_hip_joint/velocity
+      - /wheel_leg/right_hip_joint/torque
+      - /wheel_leg/right_knee_joint/angle
+      - /wheel_leg/right_knee_joint/velocity
+      - /wheel_leg/right_knee_joint/torque
+      - /wheel_leg/left_wheel/velocity
+      - /wheel_leg/left_wheel/torque
+      - /wheel_leg/right_wheel/velocity
+      - /wheel_leg/right_wheel/torque
+    write_interval: 1
+    flush_interval: 1000
 
 value_broadcaster:
   ros__parameters:
