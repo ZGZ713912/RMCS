@@ -1,0 +1,158 @@
+# 云台开环力矩辨识（yaw/pitch 系统辨识主实验）。
+# 与 wheel-leg-gimbal-sweep.yaml 的区别：这里没有角度/速度 PID 级联，
+# gimbal_torque_sweep 直接写 /gimbal/{yaw,pitch}/control_torque，
+# 因此 CSV 里记录的就是"激励本身"，可以做开环 plant identification。
+#
+# 腿始终请求失能，轮、摩擦轮、拨弹零力矩；不包含底盘/腿/射击控制器。
+# 腿和轮不会主动保持姿态；pitch 在零力矩下会被重力拉下垂，测试时机体必须外部支撑。
+#
+# 一次启动只跑一种实验（experiment 参数），换实验要改这一行并重启：
+#   hold        零力矩保持（已标定重力前馈时会托住 pitch）
+#   chirp       对数 chirp 力矩扫频，宽频传递函数
+#   staircase   力矩阶梯，死区/库仑摩擦/pitch 重力矩
+#   square      对称力矩方波，时域阶跃/齿隙
+#   calibration 先标定 pitch 重力矩曲线（仅 pitch，中/上 启动）
+#
+# DR16 [左,右]：中/中=保持；上/中=yaw；中/上=pitch；上/上=先 yaw 后 pitch。
+# 双下、掉线、UNKNOWN 或其它组合=停止并清零输出。
+# 扫完/标定完保持末态，不自动重跑；切换档位或双下后重新选择，每次选择重新捕获中心。
+#
+# 推荐流程：
+#   1) 外部支撑好机体，experiment: calibration，中/上 启动，读日志里的
+#      pitch_gravity_cos_nm / sin_nm / const_nm；
+#   2) 把三个系数填进本文件，pitch_gravity_enabled: true；
+#   3) 再逐次跑 chirp / staircase / square。
+# 启动：ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-gimbal-torque-sweep
+rmcs_executor:
+  ros__parameters:
+    update_rate: 1000.0
+    components:
+      - rmcs_core::hardware::WheelLegDualBoard -> wheel_leg
+      - rmcs_core::controller::identification::GimbalTorqueSweepController -> gimbal_torque_sweep
+      - rmcs_core::debug::ValueCollector -> value_collector
+
+wheel_leg:
+  ros__parameters:
+    serial_filter_bottom_board: "AF-CBB3-7053-32C5-F3B5-B460-A786-DA9A-1FF1"
+    serial_filter_top_board: "AF-46C7-7B12-9364-64F6-D95A-E4F4-9299-1B75"
+    yaw_motor_zero_point: 58379
+    pitch_motor_zero_point: 12637
+    # 硬件发送层再次禁止腿/轮/射击输出，与上层 enable_request 无关。
+    gimbal_only: true
+    dm_master_ids: [1, 2, 1, 2]
+    dm_mit_position_max: [12.5, 12.5, 12.5, 12.5]
+    dm_mit_velocity_max: [45.0, 45.0, 45.0, 45.0]
+    dm_mit_torque_max: [54.0, 54.0, 54.0, 54.0]
+    dm_control_torque_max: [40.0, 40.0, 40.0, 40.0]
+    feedback_timeout_s: 0.04
+
+gimbal_torque_sweep:
+  ros__parameters:
+    experiment: chirp
+
+    # 两轴都是 LK MG4010-Ei10（额定 4.5 Nm）；这里是软件总限幅，超限直接抛异常。
+    # 幅值必须 <= 限幅；chirp/方波峰值就是它，阶梯只在这条带内走。
+    torque_limit_nm: 1.5
+    yaw_torque_amplitude_nm: 0.35
+    pitch_torque_amplitude_nm: 0.25
+
+    # chirp：对数扫频 + 首尾 raised-cosine 渐入渐出，弧度/rad/s/Nm。
+    # 恒力矩扫频的位移按 1/w^2 增长，低频端很容易先顶到角度限位，
+    # 因此默认 chirp_schedule: velocity（力矩幅值随频率线性缩放，位移有界）。
+    # 需要教科书式恒幅 chirp 时改成 constant，并自行降低幅值或限频。
+    frequency_start_hz: 0.5
+    frequency_end_hz: 5.0
+    chirp_schedule: velocity
+    duration_s: 60.0
+    settle_s: 2.0
+    ramp_s: 2.0
+
+    # staircase：从 -A 到 +A 等分，每档保持 dwell。
+    staircase_steps: 9
+    staircase_dwell_s: 2.0
+
+    # square：对称 ±A，半周期交替，边沿用 raised-cosine 过渡（不是硬跳变）。
+    square_period_s: 10.0
+    square_cycles: 6
+    square_edge_s: 0.005
+
+    # pitch 保持力矩模型：tau = cos*cos(theta) + sin*sin(theta) + const。
+    # 系数由 calibration 实验给出；未标定前保持 false，pitch 中/中 档不托举。
+    pitch_gravity_enabled: false
+    pitch_gravity_cos_nm: 0.0
+    pitch_gravity_sin_nm: 0.0
+    pitch_gravity_const_nm: 0.0
+
+    # calibration：内部角度 PI 逐点保持，上行/下行各采一遍取平均抵消库仑摩擦。
+    # 只在 experiment: calibration 时生效，且只接受 pitch 档（中/上）。
+    calibration_angles_rad: [-0.50, -0.30, -0.10, 0.10, 0.30, 0.45]
+    calibration_dwell_s: 1.2
+    calibration_kp: 6.0
+    calibration_ki: 8.0
+    # 参考角斜坡速率，保证准静态而不是一步跳到下一个角度。
+    calibration_rate_rad_s: 0.6
+
+    # 安全包络：yaw 离捕获中心 20 deg；pitch 与实车一致 down 35 deg / up 30 deg。
+    yaw_travel_limit_rad: 0.3490658503988659
+    pitch_min_rad: -0.6109
+    pitch_max_rad: 0.5236
+    max_velocity_rad_s: 3.0
+    feedback_timeout_s: 0.1
+
+value_collector:
+  ros__parameters:
+    csv_path: "/tmp/wheel_leg_gimbal_torque_sweep_<timestamp>.csv"
+    write_interval: 1 # 1000 Hz
+    flush_interval: 1000
+    strict_signals: true
+    # state: 0=停止 1=保持/等待 2=激励 3=完成保持 4=反馈故障 5=角度/速度故障 6=实验与档位不匹配。
+    # mode: 0=停止 1=保持 2=yaw 3=pitch 4=依次；axis: 0=无 1=yaw 2=pitch。
+    # experiment: 0=hold 1=chirp 2=staircase 3=square 4=calibration。
+    # control_torque 就是开环激励指令（calibration 时是保持力矩）；excitation 是不含重力前馈的纯激励。
+    # /torque 是驱动电流估计；control_torque 是软件指令，不是独立力矩传感器。
+    signals:
+      - /gimbal/torque_sweep/steady_ns
+      - /gimbal/torque_sweep/state
+      - /gimbal/torque_sweep/mode
+      - /gimbal/torque_sweep/experiment
+      - /gimbal/torque_sweep/axis
+      - /gimbal/torque_sweep/step
+      - /gimbal/torque_sweep/enabled
+      - /gimbal/torque_sweep/completed
+      - /gimbal/torque_sweep/elapsed_s
+      - /gimbal/torque_sweep/frequency_hz
+      - /gimbal/pitch/torque_sweep/fit_cos
+      - /gimbal/pitch/torque_sweep/fit_sin
+      - /gimbal/pitch/torque_sweep/fit_const
+      - /gimbal/pitch/torque_sweep/fit_residual
+      - /gimbal/pitch/torque_sweep/gravity
+      - /gimbal/yaw/torque_sweep/excitation
+      - /gimbal/yaw/angle
+      - /gimbal/yaw/velocity
+      - /gimbal/yaw/velocity_imu
+      - /gimbal/yaw/control_torque
+      - /gimbal/yaw/torque
+      - /gimbal/yaw/temperature
+      - /gimbal/yaw/feedback_steady_ns
+      - /gimbal/pitch/torque_sweep/excitation
+      - /gimbal/pitch/angle
+      - /gimbal/pitch/velocity
+      - /gimbal/pitch/velocity_imu
+      - /gimbal/pitch/control_torque
+      - /gimbal/pitch/torque
+      - /gimbal/pitch/temperature
+      - /gimbal/pitch/feedback_steady_ns
+      - /gimbal/imu/last_steady_ns
+      - /wheel_leg/dr16_fresh
+      - /wheel_leg/enable_request
+      - /wheel_leg/dm_control_ready
+      - /chassis/reset_count
+      - /wheel_leg/left_hip_joint/control_torque
+      - /wheel_leg/left_knee_joint/control_torque
+      - /wheel_leg/right_hip_joint/control_torque
+      - /wheel_leg/right_knee_joint/control_torque
+      - /wheel_leg/left_wheel/control_torque
+      - /wheel_leg/right_wheel/control_torque
+      - /gimbal/left_friction/control_torque
+      - /gimbal/right_friction/control_torque
+      - /gimbal/bullet_feeder/control_torque

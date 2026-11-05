@@ -12,6 +12,7 @@
   <class type="rmcs_core::hardware::WheelLeg" base_class_type="rmcs_executor::Component" />
   <class type="rmcs_core::hardware::WheelLegDualBoard" base_class_type="rmcs_executor::Component" />
   <class type="rmcs_core::controller::identification::GimbalFrequencySweepController" base_class_type="rmcs_executor::Component" />
+  <class type="rmcs_core::controller::identification::GimbalTorqueSweepController" base_class_type="rmcs_executor::Component" />
   
   <class type="rmcs_core::hardware::Px4VisionBridge" base_class_type="rmcs_executor::Component" />
 

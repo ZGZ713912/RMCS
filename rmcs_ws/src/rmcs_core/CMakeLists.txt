@@ -56,6 +56,17 @@ if(BUILD_TESTING)
         RMCS_GIMBAL_PROFILE="${PROJECT_SOURCE_DIR}/../rmcs_bringup/config/wheel-leg-gimbal-sweep.yaml"
         RMCS_GIMBAL_CSV="${CMAKE_CURRENT_BINARY_DIR}/gimbal_frequency_sweep_test.csv")
     target_link_libraries(gimbal_frequency_sweep_integration ${PROJECT_NAME})
+    foreach(experiment IN ITEMS chirp staircase square calibration)
+        ament_add_gtest(gimbal_torque_sweep_${experiment}_integration
+            test/gimbal_torque_sweep_integration.cpp)
+        target_include_directories(gimbal_torque_sweep_${experiment}_integration PRIVATE
+            src ${PROJECT_SOURCE_DIR}/../rmcs_executor/src)
+        target_compile_definitions(gimbal_torque_sweep_${experiment}_integration PRIVATE
+            RMCS_TORQUE_PROFILE="${PROJECT_SOURCE_DIR}/../rmcs_bringup/config/wheel-leg-gimbal-torque-sweep.yaml"
+            RMCS_TORQUE_CSV="${CMAKE_CURRENT_BINARY_DIR}/gimbal_torque_sweep_${experiment}_test.csv"
+            RMCS_TORQUE_EXPERIMENT="${experiment}")
+        target_link_libraries(gimbal_torque_sweep_${experiment}_integration ${PROJECT_NAME})
+    endforeach()
     ament_add_gtest(wheel_leg_frequency_sweep test/wheel_leg_frequency_sweep.cpp)
     target_include_directories(wheel_leg_frequency_sweep PRIVATE src)
     ament_target_dependencies(wheel_leg_frequency_sweep rmcs_msgs rmcs_executor)
