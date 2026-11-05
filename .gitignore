@@ -88,6 +88,8 @@ CLAUDE.md
 /.script/tests/
 /.script/identification/test_*.py
 /rmcs_ws/src/rmcs_core/test/*
+!/rmcs_ws/src/rmcs_core/test/gimbal_frequency_sweep_integration.cpp
+!/rmcs_ws/src/rmcs_core/test/pid_calculator.cpp
 !/rmcs_ws/src/rmcs_core/test/wheel_leg_imu.cpp
 !/rmcs_ws/src/rmcs_core/test/wheel_leg_feedback.cpp
 !/rmcs_ws/src/rmcs_core/test/wheel_leg_cascade_pp.cpp

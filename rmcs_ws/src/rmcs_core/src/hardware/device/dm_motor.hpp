@@ -44,6 +44,19 @@ namespace rmcs_core::hardware::device {
 ///
 /// 用法（模式 A，与训练合同一致）：PC 侧做 PD，本驱动只下发 kp=kd=0 的纯扭矩
 /// （t_ff = control_torque）；模式 B（可选）：直接下发 p_des/v_des/kp/kd 让电机内环 PD。
+inline const char* dm_error_text(int code) noexcept {
+    switch (code) {
+    case 0x8: return "over-voltage";
+    case 0x9: return "under-voltage";
+    case 0xA: return "over-current";
+    case 0xB: return "MOS over-temperature";
+    case 0xC: return "coil over-temperature";
+    case 0xD: return "communication lost";
+    case 0xE: return "overload";
+    default: return "unknown";
+    }
+}
+
 class DmMotor {
 public:
     enum class Type : uint8_t { kDM8009 }; // 如需其他型号在此扩展

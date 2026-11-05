@@ -49,6 +49,13 @@ install(TARGETS wheel_leg_recording_preview DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     find_package(rmcs_rl REQUIRED)
+    ament_add_gtest(gimbal_frequency_sweep_integration test/gimbal_frequency_sweep_integration.cpp)
+    target_include_directories(gimbal_frequency_sweep_integration PRIVATE
+        src ${PROJECT_SOURCE_DIR}/../rmcs_executor/src)
+    target_compile_definitions(gimbal_frequency_sweep_integration PRIVATE
+        RMCS_GIMBAL_PROFILE="${PROJECT_SOURCE_DIR}/../rmcs_bringup/config/wheel-leg-gimbal-sweep.yaml"
+        RMCS_GIMBAL_CSV="${CMAKE_CURRENT_BINARY_DIR}/gimbal_frequency_sweep_test.csv")
+    target_link_libraries(gimbal_frequency_sweep_integration ${PROJECT_NAME})
     ament_add_gtest(wheel_leg_frequency_sweep test/wheel_leg_frequency_sweep.cpp)
     target_include_directories(wheel_leg_frequency_sweep PRIVATE src)
     ament_target_dependencies(wheel_leg_frequency_sweep rmcs_msgs rmcs_executor)
