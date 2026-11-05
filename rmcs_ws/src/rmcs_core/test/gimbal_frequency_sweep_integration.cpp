@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include <eigen3/Eigen/Dense>
 #include <gtest/gtest.h>
 #include <pluginlib/class_loader.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -33,10 +34,12 @@ constexpr std::array parked{
 
 class Feedback final : public Component {
 public:
-    explicit Feedback(std::atomic<int>& phase)
-        : phase_(phase) {
+    Feedback(std::atomic<int>& phase, std::atomic<double>& stick)
+        : phase_(phase)
+        , stick_(stick) {
         register_output("/remote/switch/left", left_, Switch::DOWN);
         register_output("/remote/switch/right", right_, Switch::DOWN);
+        register_output("/remote/joystick/left", joystick_, Eigen::Vector2d::Zero());
         register_output("/wheel_leg/dr16_fresh", fresh_, true);
         register_output("/wheel_leg/dm_control_ready", dm_ready_, false);
         register_output("/gimbal/imu/last_steady_ns", imu_ns_, std::uint64_t{0});
@@ -56,6 +59,7 @@ public:
                                            : Switch::MIDDLE;
         if (phase == 13)
             *left_ = Switch::UNKNOWN;
+        *joystick_ = Eigen::Vector2d{0., stick_.load()};
         *fresh_ = phase != 6;
         const std::uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                       std::chrono::steady_clock::now().time_since_epoch())
@@ -88,6 +92,8 @@ public:
 
 private:
     std::atomic<int>& phase_;
+    std::atomic<double>& stick_;
+    OutputInterface<Eigen::Vector2d> joystick_;
     OutputInterface<Switch> left_, right_;
     OutputInterface<bool> fresh_, dm_ready_;
     OutputInterface<std::uint64_t> imu_ns_;
@@ -129,7 +135,9 @@ public:
             if ((std::isfinite(command) && std::abs(command) > 2.)
                 || (!*enabled_ && std::isfinite(command) && command != 0.))
                 ++violations;
-            if (*enabled_) {
+            // The chirp envelope only bounds a running sweep axis; manual mode is
+            // free to move the reference anywhere inside the pitch range.
+            if (*enabled_ && *axis_ != 0) {
                 if (!std::isfinite(command) || !std::isfinite(*reference_velocity_[i])
                     || std::abs(*reference_[i] - center[i]) > amplitude[i] + 1e-10)
                     ++violations;
@@ -175,10 +183,11 @@ bool await(const std::function<bool()>& predicate, std::chrono::milliseconds tim
 
 TEST(GimbalSweepIntegration, DeployedDoublePidGraphSweepStopResetAndParkedOutputs) {
     std::atomic<int> phase{0};
+    std::atomic<double> stick{0.};
     pluginlib::ClassLoader<Component> loader{"rmcs_executor", "rmcs_executor::Component"};
     EXPECT_TRUE(loader.isClassAvailable("rmcs_core::hardware::WheelLegDualBoard"));
     Component::initializing_component_name = "feedback";
-    auto feedback = std::make_shared<Feedback>(phase);
+    auto feedback = std::make_shared<Feedback>(phase, stick);
     Component::initializing_component_name = "observe";
     auto observe = std::make_shared<Observe>();
     rclcpp::executors::SingleThreadedExecutor ros;
@@ -214,6 +223,15 @@ TEST(GimbalSweepIntegration, DeployedDoublePidGraphSweepStopResetAndParkedOutput
         ASSERT_TRUE(await([&] { return observe->enabled && observe->state == 1; }));
         EXPECT_NEAR(observe->yaw_reference, yaw_center, 1e-10);
         EXPECT_NEAR(observe->pitch_reference, pitch_center, 1e-10);
+        // Double-middle is manual: the left stick moves the reference, and the
+        // reference holds where the stick left it.
+        stick = .5;
+        ASSERT_TRUE(await([&] { return observe->yaw_reference.load() > yaw_center + .1; }));
+        stick = 0.;
+        const auto manual_reference = observe->yaw_reference.load();
+        std::this_thread::sleep_for(120ms);
+        EXPECT_NEAR(observe->yaw_reference.load(), manual_reference, .02);
+        EXPECT_NEAR(observe->pitch_reference.load(), pitch_center, 1e-10);
         phase = 2;
         ASSERT_TRUE(await([&] { return observe->state == 2 && observe->axis == 1; }));
         EXPECT_GE(observe->frequency, .2);

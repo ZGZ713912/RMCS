@@ -1,8 +1,9 @@
 # 双板实车 hardware，来源 dev/wheel-leg-refactor；只给 yaw/pitch 下发闭环力矩。
 # 腿始终请求失能，轮、摩擦轮、拨弹零力矩；不包含底盘/腿/射击控制器。
 # 腿和轮不会主动保持姿态，测试时机体应由外部支撑固定。
-# DR16 [左,右]：中/中=当前位置保持；上/中=yaw；中/上=pitch；上/上=先 yaw 后 pitch。
-# 双下、掉线、UNKNOWN 或其它组合=停止/清空状态。扫完保持中心，不自动重跑。
+# DR16 [左,右]：中/中=手动（左摇杆 yaw/pitch，和正常云台一致）；上/中=yaw；
+# 中/上=pitch；上/上=先 yaw 后 pitch。双下、掉线、UNKNOWN 或其它组合=停止/清空状态。
+# 扫完保持中心，不自动重跑。
 # 反馈/范围故障停止后，切换档位或双下再重新选择；每次选择捕获当前位置为中心。
 # 启动：ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-gimbal-sweep
 rmcs_executor:
@@ -48,6 +49,12 @@ gimbal_sweep:
     pitch_max_rad: 0.5236 # 同当前实车 down 30 deg
     # 只要求云台 yaw/pitch CAN、云台 IMU 和遥控新鲜；不依赖腿/轮反馈。
     feedback_timeout_s: 0.1
+    # 中/中 手动模式：左摇杆 y 推 yaw、x 推 pitch（向上为正，与 SimpleGimbalController 一致），
+    # 杆量线性映射成参考角速度，进入该档时以当前角度为起点。
+    # 实际跟随 slew 仍受角度环输出限幅约束（yaw 2 rad/s、pitch 1.5 rad/s）。
+    manual_yaw_rate_rad_s: 6.0
+    manual_pitch_rate_rad_s: 6.0
+    manual_deadzone: 0.02
 
 # 以下为 1000 Hz 离散 PID：I 每拍累加、D 为相邻误差差，不再额外乘/除 dt。
 # yaw 继承当前增益并限制输出；pitch 原配置只有位置环，这里的双环是待整定起点。

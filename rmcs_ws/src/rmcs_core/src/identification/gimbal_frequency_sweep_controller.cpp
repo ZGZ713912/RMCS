@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <eigen3/Eigen/Dense>
 #include <rclcpp/node.hpp>
 #include <rmcs_executor/component.hpp>
 #include <rmcs_msgs/switch.hpp>
@@ -25,6 +26,9 @@ public:
               rclcpp::NodeOptions{}.automatically_declare_parameters_from_overrides(true)) {
         register_input("/remote/switch/left", switch_left_);
         register_input("/remote/switch/right", switch_right_);
+        // Double-middle drives the normal gimbal; a missing publisher must not
+        // stop the sweep profile, so the stick defaults to centered.
+        register_input("/remote/joystick/left", joystick_left_, false);
         register_input("/wheel_leg/dr16_fresh", remote_fresh_);
         register_input("/predefined/timestamp", timestamp_);
         register_input("/gimbal/imu/last_steady_ns", imu_ns_);
@@ -68,6 +72,9 @@ public:
         pitch_max_ = get_parameter("pitch_max_rad").as_double();
         yaw_travel_limit_ = get_parameter("yaw_travel_limit_rad").as_double();
         timeout_ = get_parameter("feedback_timeout_s").as_double();
+        get_parameter_or("manual_yaw_rate_rad_s", manual_yaw_rate_, 6.);
+        get_parameter_or("manual_pitch_rate_rad_s", manual_pitch_rate_, 6.);
+        get_parameter_or("manual_deadzone", manual_deadzone_, .02);
         for (const double value :
              {frequency_start_, frequency_end_, duration_, ramp_, amplitude_[0], amplitude_[1],
               yaw_travel_limit_, timeout_})
@@ -78,6 +85,11 @@ public:
             || frequency_end_ < frequency_start_ || ramp_ > duration_ / 2.
             || amplitude_[0] >= yaw_travel_limit_ || 2. * amplitude_[1] >= pitch_max_ - pitch_min_)
             throw std::invalid_argument("Invalid gimbal sweep frequency, envelope or angle limits");
+        for (const double rate : {manual_yaw_rate_, manual_pitch_rate_})
+            if (!std::isfinite(rate) || rate <= 0.)
+                throw std::invalid_argument("Manual gimbal rates must be finite and positive");
+        if (!std::isfinite(manual_deadzone_) || manual_deadzone_ < 0. || manual_deadzone_ >= 1.)
+            throw std::invalid_argument("manual_deadzone must be in [0, 1)");
     }
 
     void update() override {
@@ -124,8 +136,11 @@ public:
         }
         *elapsed_ = std::max(0., std::chrono::duration<double>(*timestamp_ - start_).count());
         const double pitch = signed_angle(*angle_[1]);
-        if (std::abs(signed_angle(*angle_[0] - center_[0])) > yaw_travel_limit_
-            || pitch < pitch_min_ || pitch > pitch_max_) {
+        // Manual mode owns its reference and may turn freely; sweep modes stay
+        // inside the travel envelope captured at the start of the sweep.
+        const bool outside_yaw =
+            mode != 1 && std::abs(signed_angle(*angle_[0] - center_[0])) > yaw_travel_limit_;
+        if (outside_yaw || pitch < pitch_min_ || pitch > pitch_max_) {
             disable(5);
             faulted_ = true;
             return;
@@ -133,6 +148,8 @@ public:
 
         std::array<double, 2> target = center_;
         std::array<double, 2> target_velocity{};
+        if (mode == 1)
+            update_manual_reference(now, target, target_velocity);
         *frequency_ = 0.;
         *axis_ = 0;
         *completed_ = false;
@@ -216,6 +233,7 @@ private:
         if (*enabled_)
             ++*reset_count_;
         *enabled_ = false;
+        manual_initialized_ = false;
         *state_ = state;
         *axis_ = 0;
         *frequency_ = 0.;
@@ -228,12 +246,41 @@ private:
         }
     }
 
+    // Double-middle behaves like the normal gimbal: the left stick integrates a
+    // reference angle that the existing PID cascade tracks.
+    void update_manual_reference(
+        const std::chrono::steady_clock::time_point& now, std::array<double, 2>& target,
+        std::array<double, 2>& target_velocity) {
+        const double dt =
+            std::clamp(std::chrono::duration<double>(now - manual_last_).count(), 0., .01);
+        manual_last_ = now;
+        if (!manual_initialized_) {
+            manual_reference_ = center_;
+            manual_initialized_ = true;
+            target = manual_reference_;
+            return;
+        }
+        const Eigen::Vector2d stick =
+            joystick_left_.ready() ? *joystick_left_ : Eigen::Vector2d{0., 0.};
+        const auto deadband = [this](double value) {
+            return std::abs(value) < manual_deadzone_ ? 0. : value;
+        };
+        const double yaw_rate = manual_yaw_rate_ * deadband(stick.y());
+        const double pitch_rate = -manual_pitch_rate_ * deadband(stick.x());
+        manual_reference_[0] = signed_angle(manual_reference_[0] + yaw_rate * dt);
+        manual_reference_[1] =
+            std::clamp(manual_reference_[1] + pitch_rate * dt, pitch_min_, pitch_max_);
+        target = manual_reference_;
+        target_velocity = {yaw_rate, pitch_rate};
+    }
+
     static double signed_angle(double angle) {
         return std::remainder(angle, 2. * std::numbers::pi);
     }
 
     static constexpr double nan_ = std::numeric_limits<double>::quiet_NaN();
     InputInterface<rmcs_msgs::Switch> switch_left_, switch_right_;
+    InputInterface<Eigen::Vector2d> joystick_left_;
     InputInterface<bool> remote_fresh_;
     InputInterface<std::chrono::steady_clock::time_point> timestamp_;
     InputInterface<std::uint64_t> imu_ns_;
@@ -250,7 +297,10 @@ private:
     double frequency_start_, frequency_end_, duration_, ramp_, settle_;
     std::array<double, 2> amplitude_, center_{};
     double pitch_min_, pitch_max_, yaw_travel_limit_, timeout_;
-    std::chrono::steady_clock::time_point start_;
+    double manual_yaw_rate_ = 6., manual_pitch_rate_ = 6., manual_deadzone_ = .02;
+    std::array<double, 2> manual_reference_{};
+    std::chrono::steady_clock::time_point start_, manual_last_{};
+    bool manual_initialized_ = false;
     int previous_mode_ = 0;
     bool faulted_ = false;
 };
