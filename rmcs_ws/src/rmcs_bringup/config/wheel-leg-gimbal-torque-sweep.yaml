@@ -22,7 +22,7 @@
 #   1) 外部支撑好机体，experiment: calibration，中/上 启动，读日志里的
 #      pitch_gravity_cos_nm / sin_nm / const_nm；
 #   2) 把三个系数填进本文件，pitch_gravity_enabled: true；
-#   3) 再逐次跑 chirp / staircase / square。
+#   3) 再逐次跑 chirp / staircase / square / sine。
 # 启动：ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-gimbal-torque-sweep
 rmcs_executor:
   ros__parameters:
@@ -122,7 +122,7 @@ value_collector:
     strict_signals: true
     # state: 0=停止 1=保持/等待 2=激励 3=完成保持 4=反馈故障 5=角度/速度故障 6=实验与档位不匹配。
     # mode: 0=停止 1=保持 2=yaw 3=pitch 4=依次；axis: 0=无 1=yaw 2=pitch。
-    # experiment: 0=hold 1=chirp 2=staircase 3=square 4=calibration。
+    # experiment: 0=hold 1=chirp 2=staircase 3=square 4=calibration 5=sine。
     # control_torque 就是开环激励指令（calibration 时是保持力矩）；excitation 是不含重力前馈的纯激励。
     # /torque 是驱动电流估计；control_torque 是软件指令，不是独立力矩传感器。
     signals:
