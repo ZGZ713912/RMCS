@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 
 #include <rclcpp/logging.hpp>
 #include <rclcpp/node.hpp>
@@ -43,6 +45,8 @@ public:
 
         get_parameter("output_min", pid_calculator_.output_min);
         get_parameter("output_max", pid_calculator_.output_max);
+        get_parameter("total_output_min", total_output_min_);
+        get_parameter("total_output_max", total_output_max_);
     }
 
     void update() override {
@@ -54,7 +58,8 @@ public:
         }
 
         auto err = *setpoint_ - *measurement_;
-        *control_ = *feedforward_ + pid_calculator_.update(err);
+        *control_ = std::clamp(
+            *feedforward_ + pid_calculator_.update(err), total_output_min_, total_output_max_);
     }
 
 private:
@@ -66,6 +71,8 @@ private:
     InputInterface<std::size_t> reset_count_;
     std::size_t last_reset_count_ = 0;
     bool reset_enabled_ = false;
+    double total_output_min_ = -std::numeric_limits<double>::infinity();
+    double total_output_max_ = std::numeric_limits<double>::infinity();
 };
 
 } // namespace rmcs_core::controller::pid

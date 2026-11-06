@@ -4,7 +4,8 @@
 # DR16 [左,右]：中/中=手动（左摇杆 yaw/pitch，和正常云台一致）；上/中=yaw；
 # 中/上=pitch；上/上=先 yaw 后 pitch。双下、掉线、UNKNOWN 或其它组合=停止/清空状态。
 # 扫完保持中心，不自动重跑。
-# 反馈/范围故障停止后，切换档位或双下再重新选择；每次选择捕获当前位置为中心。
+# 反馈故障停止后，切换档位或双下再重新选择；每次选择捕获当前位置为中心。
+# 无位置软限位或中间 PID 限幅，仅最终总力矩 ±4.5 Nm；避免机械/线缆干涉。
 # 启动：ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-gimbal-sweep
 rmcs_executor:
   ros__parameters:
@@ -18,6 +19,7 @@ rmcs_executor:
       - rmcs_core::controller::pid::ErrorPidController -> pitch_angle_pid_controller
       - rmcs_core::controller::pid::PidController -> pitch_velocity_pid_controller
       - rmcs_core::debug::ValueCollector -> value_collector
+      - rmcs_core::broadcaster::ValueBroadcaster -> value_broadcaster
 
 wheel_leg:
   ros__parameters:
@@ -39,37 +41,34 @@ gimbal_sweep:
     # 固定机体下，编码器位置外环 + 云台 IMU 角速度内环；弧度/rad/s/Nm。
     # 对数 chirp，首尾 raised-cosine 渐入渐出；非扫频轴维持捕获位置。
     frequency_start_hz: 0.2
-    frequency_end_hz: 5.0
+    frequency_end_hz: 1.0 # 双环首轮低频验证；稳定后再逐步扩频
     duration_s: 60.0
-    settle_s: 2.0
+    settle_s: 5.0
     ramp_s: 2.0
     yaw_amplitude_rad: 0.05235987755982989 # 3 deg，单边幅度
     pitch_amplitude_rad: 0.03490658503988659 # 2 deg，单边幅度
-    yaw_travel_limit_rad: 0.3490658503988659 # 距捕获中心 20 deg
-    pitch_min_rad: -0.6109 # 同当前实车 up 35 deg
-    pitch_max_rad: 0.5236 # 同当前实车 down 30 deg
     # 只要求云台 yaw/pitch CAN、云台 IMU 和遥控新鲜；不依赖腿/轮反馈。
     feedback_timeout_s: 0.1
     # 中/中 手动模式：左摇杆 y 推 yaw、x 推 pitch（向上为正，与 SimpleGimbalController 一致），
     # 杆量线性映射成参考角速度，进入该档时以当前角度为起点。
-    # 实际跟随 slew 仍受角度环输出限幅约束（yaw 2 rad/s、pitch 1.5 rad/s）。
+    # 与正常云台一致的手动参考速度；实际跟随仍由双环控制。
     manual_yaw_rate_rad_s: 6.0
     manual_pitch_rate_rad_s: 6.0
     manual_deadzone: 0.02
 
 # 以下为 1000 Hz 离散 PID：I 每拍累加、D 为相邻误差差，不再额外乘/除 dt。
-# yaw 继承当前增益并限制输出；pitch 原配置只有位置环，这里的双环是待整定起点。
+# yaw 参考开环辨识降低速度环增益；pitch 为带已调重力补偿的待验证粗调起点。
+# 四个环均采用纯 P，不设置积分限幅；待闭环扫频数据验证后再精调。
+# 无中间输出限幅，速度 PID + 前馈之后仅作最终总力矩 ±4.5 Nm 限幅。
 # 修改 PID 增益后重新启动该配置生效。
 yaw_angle_pid_controller:
   ros__parameters:
     measurement: /gimbal/yaw/control_angle_error
     control: /gimbal/yaw/control_velocity
     reset_interface: /chassis/reset_count
-    kp: 15.0
+    kp: 5.0
     ki: 0.0
     kd: 0.0
-    output_min: -2.0
-    output_max: 2.0
 
 yaw_velocity_pid_controller:
   ros__parameters:
@@ -77,24 +76,20 @@ yaw_velocity_pid_controller:
     setpoint: /gimbal/yaw/control_velocity
     control: /gimbal/yaw/control_torque
     reset_interface: /chassis/reset_count
-    kp: 4.4
-    ki: 0.00011
-    kd: 0.0011
-    integral_min: -3000.0
-    integral_max: 3000.0
-    output_min: -2.0
-    output_max: 2.0
+    kp: 1.5
+    ki: 0.0
+    kd: 0.0
+    total_output_min: -4.5
+    total_output_max: 4.5
 
 pitch_angle_pid_controller:
   ros__parameters:
     measurement: /gimbal/pitch/control_angle_error
     control: /gimbal/pitch/control_velocity
     reset_interface: /chassis/reset_count
-    kp: 8.0
+    kp: 6.0
     ki: 0.0
     kd: 0.0
-    output_min: -1.5
-    output_max: 1.5
 
 pitch_velocity_pid_controller:
   ros__parameters:
@@ -103,17 +98,17 @@ pitch_velocity_pid_controller:
     control: /gimbal/pitch/control_torque
     feedforward: /gimbal/pitch/torque_ff
     reset_interface: /chassis/reset_count
-    kp: 1.0
+    kp: 1.5
     ki: 0.0
     kd: 0.0
-    output_min: -2.0
-    output_max: 2.0
+    total_output_min: -4.5
+    total_output_max: 4.5
 
 # deformable 同款两参数模型：tau_ff = gain * sin(world_pitch - phase)，世界 pitch 取自 top 板 IMU 的 TF。
 pitch_gravity_ff:
   ros__parameters:
-    pitch_gravity_ff_gain: 0.0
-    pitch_gravity_ff_phase: 0.0
+    pitch_gravity_ff_gain: 0.9 # 沿用实车手调结果
+    pitch_gravity_ff_phase: 0.75 # rad，沿用实车手调结果
 
 value_collector:
   ros__parameters:
@@ -170,3 +165,17 @@ value_collector:
       - /gimbal/left_friction/control_torque
       - /gimbal/right_friction/control_torque
       - /gimbal/bullet_feeder/control_torque
+
+value_broadcaster:
+  ros__parameters:
+    forward_list:
+      - /gimbal/yaw/control_torque
+      - /gimbal/yaw/angle
+      - /gimbal/yaw/velocity
+      - /gimbal/yaw/control_angle_error
+      - /gimbal/yaw/control_velocity
+      - /gimbal/pitch/control_torque
+      - /gimbal/pitch/angle
+      - /gimbal/pitch/velocity
+      - /gimbal/pitch/control_angle_error
+      - /gimbal/pitch/control_velocity

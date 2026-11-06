@@ -68,22 +68,17 @@ public:
         amplitude_ = {
             get_parameter("yaw_amplitude_rad").as_double(),
             get_parameter("pitch_amplitude_rad").as_double()};
-        pitch_min_ = get_parameter("pitch_min_rad").as_double();
-        pitch_max_ = get_parameter("pitch_max_rad").as_double();
-        yaw_travel_limit_ = get_parameter("yaw_travel_limit_rad").as_double();
         timeout_ = get_parameter("feedback_timeout_s").as_double();
         get_parameter_or("manual_yaw_rate_rad_s", manual_yaw_rate_, 6.);
         get_parameter_or("manual_pitch_rate_rad_s", manual_pitch_rate_, 6.);
         get_parameter_or("manual_deadzone", manual_deadzone_, .02);
         for (const double value :
              {frequency_start_, frequency_end_, duration_, ramp_, amplitude_[0], amplitude_[1],
-              yaw_travel_limit_, timeout_})
+              timeout_})
             if (!std::isfinite(value) || value <= 0.)
                 throw std::invalid_argument("Gimbal sweep ranges must be finite and positive");
-        if (!std::isfinite(settle_) || settle_ < 0. || !std::isfinite(pitch_min_)
-            || !std::isfinite(pitch_max_) || pitch_min_ >= pitch_max_
-            || frequency_end_ < frequency_start_ || ramp_ > duration_ / 2.
-            || amplitude_[0] >= yaw_travel_limit_ || 2. * amplitude_[1] >= pitch_max_ - pitch_min_)
+        if (!std::isfinite(settle_) || settle_ < 0. || frequency_end_ < frequency_start_
+            || ramp_ > duration_ / 2.)
             throw std::invalid_argument("Invalid gimbal sweep frequency, envelope or angle limits");
         for (const double rate : {manual_yaw_rate_, manual_pitch_rate_})
             if (!std::isfinite(rate) || rate <= 0.)
@@ -122,29 +117,11 @@ public:
         }
         if (!*enabled_) {
             center_ = {signed_angle(*angle_[0]), signed_angle(*angle_[1])};
-            if (center_[1] < pitch_min_ || center_[1] > pitch_max_
-                || (mode >= 3
-                    && (center_[1] - amplitude_[1] < pitch_min_
-                        || center_[1] + amplitude_[1] > pitch_max_))) {
-                disable(5);
-                faulted_ = true;
-                return;
-            }
             start_ = *timestamp_;
             ++*reset_count_;
             *enabled_ = true;
         }
         *elapsed_ = std::max(0., std::chrono::duration<double>(*timestamp_ - start_).count());
-        const double pitch = signed_angle(*angle_[1]);
-        // Manual mode owns its reference and may turn freely; sweep modes stay
-        // inside the travel envelope captured at the start of the sweep.
-        const bool outside_yaw =
-            mode != 1 && std::abs(signed_angle(*angle_[0] - center_[0])) > yaw_travel_limit_;
-        if (outside_yaw || pitch < pitch_min_ || pitch > pitch_max_) {
-            disable(5);
-            faulted_ = true;
-            return;
-        }
 
         std::array<double, 2> target = center_;
         std::array<double, 2> target_velocity{};
@@ -268,8 +245,7 @@ private:
         const double yaw_rate = manual_yaw_rate_ * deadband(stick.y());
         const double pitch_rate = -manual_pitch_rate_ * deadband(stick.x());
         manual_reference_[0] = signed_angle(manual_reference_[0] + yaw_rate * dt);
-        manual_reference_[1] =
-            std::clamp(manual_reference_[1] + pitch_rate * dt, pitch_min_, pitch_max_);
+        manual_reference_[1] = signed_angle(manual_reference_[1] + pitch_rate * dt);
         target = manual_reference_;
         target_velocity = {yaw_rate, pitch_rate};
     }
@@ -296,7 +272,7 @@ private:
 
     double frequency_start_, frequency_end_, duration_, ramp_, settle_;
     std::array<double, 2> amplitude_, center_{};
-    double pitch_min_, pitch_max_, yaw_travel_limit_, timeout_;
+    double timeout_;
     double manual_yaw_rate_ = 6., manual_pitch_rate_ = 6., manual_deadzone_ = .02;
     std::array<double, 2> manual_reference_{};
     std::chrono::steady_clock::time_point start_, manual_last_{};
