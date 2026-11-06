@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -162,6 +163,26 @@ public:
             can_packet_.store(can_packet, std::memory_order::relaxed);
     }
 
+    // 0x9A/0x9B replies carry motor state and the latched error code.
+    bool store_error_status(std::span<const std::byte> can_data) {
+        if (can_data.size() != 8) [[unlikely]]
+            return false;
+        const struct [[gnu::packed]] {
+            uint8_t command;
+            int8_t temperature;
+            int16_t voltage_centivolt;
+            int16_t current_centiamp;
+            uint8_t motor_state;
+            uint8_t error_state;
+        } status alignas(CanPacket8) =
+            std::bit_cast<decltype(status)>(CanPacket8{can_data});
+        if (status.command != 0x9A && status.command != 0x9B)
+            return false;
+        motor_state_.store(status.motor_state, std::memory_order::relaxed);
+        error_state_.store(status.error_state, std::memory_order::relaxed);
+        return true;
+    }
+
     void update_status() {
         const struct [[gnu::packed]] {
             uint8_t command;
@@ -231,6 +252,8 @@ public:
     double torque() const { return torque_; }
     double current_raw() const { return current_raw_; }
     double max_torque() const { return max_torque_; }
+    std::uint8_t motor_state() const { return motor_state_.load(std::memory_order::relaxed); }
+    std::uint8_t error_state() const { return error_state_.load(std::memory_order::relaxed); }
     double temperature() const { return temperature_; }
 
     /// @brief Switch the motor from the startup state (default state after power-on) to the
@@ -251,6 +274,23 @@ public:
     constexpr static CanPacket8 generate_startup_command() {
         const struct [[gnu::packed]] {
             uint8_t id = 0x88;
+            uint8_t placeholder[7]{};
+        } command alignas(CanPacket8){};
+        return std::bit_cast<CanPacket8>(command);
+    }
+
+    // 0x9A polls the drive status frame; 0x9B clears a latched drive error.
+    constexpr static CanPacket8 generate_error_status_request() {
+        const struct [[gnu::packed]] {
+            uint8_t id = 0x9A;
+            uint8_t placeholder[7]{};
+        } request alignas(CanPacket8){};
+        return std::bit_cast<CanPacket8>(request);
+    }
+
+    constexpr static CanPacket8 generate_clear_error_command() {
+        const struct [[gnu::packed]] {
+            uint8_t id = 0x9B;
             uint8_t placeholder[7]{};
         } command alignas(CanPacket8){};
         return std::bit_cast<CanPacket8>(command);
@@ -530,6 +570,8 @@ private:
 
     bool multi_turn_angle_enabled_;
     int encoder_zero_point_;
+    std::atomic<std::uint8_t> motor_state_{0x10};
+    std::atomic<std::uint8_t> error_state_{0};
 
     // Coefficients
     double status_angle_to_angle_coefficient_;

@@ -31,12 +31,45 @@
 #include "hardware/device/dm_motor.hpp"
 #include "hardware/device/dr16.hpp"
 #include "hardware/device/lk_motor.hpp"
+#include "hardware/device/lk_motor_drive.hpp"
 #include "hardware/device/remote_control.hpp"
 #include "hardware/device/supercap.hpp"
 #include "hardware/device/wheel_leg_sensor_snapshot.hpp"
 #include "hardware/util/wheel_leg_drive.hpp"
 
 namespace rmcs_core::hardware {
+
+namespace {
+
+using LkDriveClock = std::chrono::steady_clock;
+using LkDriveAction = device::LkMotorDriveScheduler::Action;
+
+device::LkMotorDriveScheduler::Feedback lk_feedback(
+    const device::LkMotor& motor, const std::atomic<std::int64_t>& error_stamp_ns) {
+    device::LkMotorDriveScheduler::Feedback feedback;
+    const auto stamp = error_stamp_ns.load(std::memory_order::relaxed);
+    if (stamp <= 0)
+        return feedback;
+    feedback.valid = true;
+    feedback.motor_state = motor.motor_state();
+    feedback.error_state = motor.error_state();
+    feedback.received_at = LkDriveClock::time_point{std::chrono::nanoseconds{stamp}};
+    return feedback;
+}
+
+std::optional<device::CanPacket8> lk_command(device::LkMotor& motor, LkDriveAction action) {
+    switch (action) {
+    case LkDriveAction::kClearError: return device::LkMotor::generate_clear_error_command();
+    case LkDriveAction::kEnable: return device::LkMotor::generate_startup_command();
+    case LkDriveAction::kErrorPoll: return device::LkMotor::generate_error_status_request();
+    case LkDriveAction::kDisable: return motor.generate_disable_command();
+    case LkDriveAction::kTorque: return motor.generate_torque_command();
+    case LkDriveAction::kNone: break;
+    }
+    return std::nullopt;
+}
+
+} // namespace
 
 using namespace wheel_leg_dual_board;
 class WheelLegDualBoard final
@@ -257,12 +290,15 @@ private:
                 device::CanPacket8::PaddingQuarter{}, supercap_.generate_command()};
             builder.can_transmit(
                 Spec::kCans.kCan0, {.can_id = 0x1FE, .can_data = supercap_package.as_bytes()});
-            builder.can_transmit(
-                Spec::kCans.kCan3,
-                {
-                    .can_id = 0x141,
-                    .can_data = gimbal_yaw_motor_.generate_torque_command().as_bytes(),
-                });
+            // LK gimbal drive: clear error -> run -> torque; double-middle arms it.
+            const bool gimbal_requested = dr16_fresh() && !both_down;
+            status_.gimbal_requested_.store(gimbal_requested, std::memory_order::relaxed);
+            const auto yaw_action = gimbal_yaw_scheduler_.next(
+                gimbal_requested, lk_feedback(gimbal_yaw_motor_, gimbal_yaw_error_ns_),
+                LkDriveClock::now());
+            if (auto packet = lk_command(gimbal_yaw_motor_, yaw_action))
+                builder.can_transmit(
+                    Spec::kCans.kCan3, {.can_id = 0x141, .can_data = packet->as_bytes()});
             WheelLegDmSideSchedulers::dispatch(
                 actions, {0, 2, 1, 3}, [&](std::size_t axis, Action action) {
                     const auto side = axis / 2;
@@ -513,10 +549,12 @@ private:
                 store_motor_feedback(hip_motors_, 2, data);
             else if (can == Spec::kCans.kCan2)
                 store_motor_feedback(knee_motors_, 4, data);
-            else if (
-                can == Spec::kCans.kCan3 && data.can_id == 0x141
-                && (data.can_data[0] == std::byte{0xA1} || data.can_data[0] == std::byte{0x9C}))
-                yaw_feedback_.publish(device::CanPacket8{data.can_data}, now_ns());
+            else if (can == Spec::kCans.kCan3 && data.can_id == 0x141) {
+                if (gimbal_yaw_motor_.store_error_status(data.can_data))
+                    gimbal_yaw_error_ns_.store(now_ns(), std::memory_order::relaxed);
+                else if (data.can_data[0] == std::byte{0xA1} || data.can_data[0] == std::byte{0x9C})
+                    yaw_feedback_.publish(device::CanPacket8{data.can_data}, now_ns());
+            }
         }
         void configure_motors(WheelLegDualBoard& status) {
             constexpr auto kMotorIds = std::array<std::uint8_t, 2>{1, 2};
@@ -697,6 +735,8 @@ private:
         device::DjiMotor wheel_motors_[2];
         device::DmMotor hip_motors_[2], knee_motors_[2];
         device::LkMotor gimbal_yaw_motor_;
+        device::LkMotorDriveScheduler gimbal_yaw_scheduler_;
+        std::atomic<std::int64_t> gimbal_yaw_error_ns_{0};
         device::WheelLegSensorMailbox<device::CanPacket8> yaw_feedback_;
         OutputInterface<std::uint64_t> yaw_feedback_ns_output_;
         device::DjiMotor feeder_motor_;
@@ -808,12 +848,13 @@ private:
 
         void command_update() {
             auto builder = board_->start_transmit();
-            builder.can_transmit(
-                Spec::kCans.kCan0,
-                {
-                    .can_id = 0x142,
-                    .can_data = pitch_motor_.generate_torque_command().as_bytes(),
-                });
+            const bool gimbal_requested =
+                status_.gimbal_requested_.load(std::memory_order::relaxed);
+            const auto pitch_action = pitch_scheduler_.next(
+                gimbal_requested, lk_feedback(pitch_motor_, pitch_error_ns_), LkDriveClock::now());
+            if (auto packet = lk_command(pitch_motor_, pitch_action))
+                builder.can_transmit(
+                    Spec::kCans.kCan0, {.can_id = 0x142, .can_data = packet->as_bytes()});
             // Left friction is ID 2 and right is ID 1; both share 0x200.
             auto friction = device::CanPacket8{
                 right_friction_.generate_command(
@@ -829,9 +870,14 @@ private:
             if (data.is_extended_can_id || data.is_remote_transmission || data.can_data.size() != 8)
                 return;
             if (can == Spec::kCans.kCan0) {
-                if (data.can_id == 0x142
-                    && (data.can_data[0] == std::byte{0xA1} || data.can_data[0] == std::byte{0x9C}))
-                    pitch_feedback_.publish(device::CanPacket8{data.can_data}, now_ns());
+                if (data.can_id == 0x142) {
+                    if (pitch_motor_.store_error_status(data.can_data))
+                        pitch_error_ns_.store(now_ns(), std::memory_order::relaxed);
+                    else if (
+                        data.can_data[0] == std::byte{0xA1}
+                        || data.can_data[0] == std::byte{0x9C})
+                        pitch_feedback_.publish(device::CanPacket8{data.can_data}, now_ns());
+                }
             } else if (can == Spec::kCans.kCan1) {
                 if (!left_friction_.match_then_store_status(data.can_id, data.can_data))
                     right_friction_.match_then_store_status(data.can_id, data.can_data);
@@ -862,6 +908,8 @@ private:
         WheelLegDualBoard& status_;
         OutputInterface<double> yaw_velocity_, pitch_velocity_;
         device::LkMotor pitch_motor_;
+        device::LkMotorDriveScheduler pitch_scheduler_;
+        std::atomic<std::int64_t> pitch_error_ns_{0};
         device::DjiMotor left_friction_, right_friction_;
         device::Bmi088Ekf bmi088_;
         device::WheelLegImuSampleClock imu_sample_clock_;
@@ -874,6 +922,7 @@ private:
     std::unique_ptr<device::RemoteControl> remote_control_;
     std::shared_ptr<Command> command_;
     OutputInterface<rmcs_description::Tf> tf_;
+    std::atomic<bool> gimbal_requested_{false};
     std::unique_ptr<BottomBoard> bottom_board_;
     std::unique_ptr<TopBoard> top_board_;
     bool gimbal_only_ = false;
