@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <pluginlib/class_loader.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rmcs_description/tf_description.hpp>
 #include <rmcs_msgs/switch.hpp>
 
 #include "executor.hpp"
@@ -42,6 +43,7 @@ public:
         register_output("/remote/joystick/left", joystick_, Eigen::Vector2d::Zero());
         register_output("/wheel_leg/dr16_fresh", fresh_, true);
         register_output("/wheel_leg/dm_control_ready", dm_ready_, false);
+        register_output("/tf", tf_);
         register_output("/gimbal/imu/last_steady_ns", imu_ns_, std::uint64_t{0});
         for (const auto* axis : {"yaw", "pitch"}) {
             const auto prefix = std::string{"/gimbal/"} + axis;
@@ -59,6 +61,12 @@ public:
                                            : Switch::MIDDLE;
         if (phase == 13)
             *left_ = Switch::UNKNOWN;
+        // World pitch differs from the encoder on purpose: a tilted chassis must not bias the feedforward.
+        if (!tf_initialized_) {
+            tf_->set_transform<rmcs_description::PitchLink, rmcs_description::OdomImu>(
+                Eigen::Quaterniond{Eigen::AngleAxisd{.2, Eigen::Vector3d::UnitY()}});
+            tf_initialized_ = true;
+        }
         *joystick_ = Eigen::Vector2d{0., stick_.load()};
         *fresh_ = phase != 6;
         const std::uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -94,6 +102,8 @@ private:
     std::atomic<int>& phase_;
     std::atomic<double>& stick_;
     OutputInterface<Eigen::Vector2d> joystick_;
+    OutputInterface<rmcs_description::Tf> tf_;
+    bool tf_initialized_ = false;
     OutputInterface<Switch> left_, right_;
     OutputInterface<bool> fresh_, dm_ready_;
     OutputInterface<std::uint64_t> imu_ns_;
@@ -230,8 +240,8 @@ TEST(GimbalSweepIntegration, DeployedDoublePidGraphSweepStopResetAndParkedOutput
         ASSERT_TRUE(await([&] { return observe->enabled && observe->state == 1; }));
         EXPECT_NEAR(observe->yaw_reference, yaw_center, 1e-10);
         EXPECT_NEAR(observe->pitch_reference, pitch_center, 1e-10);
-        // gain 0.5 / phase 0.1 from the test overrides.
-        EXPECT_NEAR(observe->torque_ff.load(), .5 * std::sin(pitch_center - .1), 1e-9);
+        // gain 0.5 / phase 0.1 over the 0.2 rad IMU world pitch, not the 0.05 rad encoder angle.
+        EXPECT_NEAR(observe->torque_ff.load(), .5 * std::sin(.2 - .1), 1e-9);
         // Double-middle is manual: the left stick moves the reference, and the
         // reference holds where the stick left it.
         stick = .5;

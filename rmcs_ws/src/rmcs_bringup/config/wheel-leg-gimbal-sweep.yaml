@@ -109,7 +109,7 @@ pitch_velocity_pid_controller:
     output_min: -2.0
     output_max: 2.0
 
-# deformable 同款两参数模型：tau_ff = gain * sin(pitch_angle - phase)，Nm / rad，手调。
+# deformable 同款两参数模型：tau_ff = gain * sin(world_pitch - phase)，世界 pitch 取自 top 板 IMU 的 TF。
 pitch_gravity_ff:
   ros__parameters:
     pitch_gravity_ff_gain: 0.0
