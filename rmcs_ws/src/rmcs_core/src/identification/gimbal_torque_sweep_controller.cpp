@@ -35,6 +35,7 @@ enum class Experiment : int {
     kStaircase = 2,
     kSquare = 3,
     kCalibration = 4,
+    kSine = 5,
 };
 
 enum class State : int {
@@ -58,6 +59,8 @@ Experiment parse_experiment(const std::string& name) {
         return Experiment::kSquare;
     if (name == "calibration")
         return Experiment::kCalibration;
+    if (name == "sine")
+        return Experiment::kSine;
     throw std::invalid_argument("Unknown gimbal torque experiment: '" + name + "'");
 }
 
@@ -68,6 +71,7 @@ const char* experiment_name(Experiment experiment) {
     case Experiment::kStaircase: return "staircase";
     case Experiment::kSquare: return "square";
     case Experiment::kCalibration: return "calibration";
+    case Experiment::kSine: return "sine";
     }
     return "unknown";
 }
@@ -129,7 +133,8 @@ public:
               get_component_name(),
               rclcpp::NodeOptions{}.automatically_declare_parameters_from_overrides(true)) {
         experiment_ = parse_experiment(parameter_or<std::string>(*this, "experiment", "hold"));
-        torque_limit_ = parameter_or(*this, "torque_limit_nm", 1.5);
+        torque_limit_ = parameter_or(*this, "torque_limit_nm", 4.5);
+        calibration_limit_ = parameter_or(*this, "calibration_torque_limit_nm", 1.5);
         amplitude_ = {
             parameter_or(*this, "yaw_torque_amplitude_nm", .5),
             parameter_or(*this, "pitch_torque_amplitude_nm", .5)};
@@ -147,6 +152,9 @@ public:
         square_period_ = parameter_or(*this, "square_period_s", 10.);
         square_cycles_ = parameter_or(*this, "square_cycles", 6);
         square_edge_ = parameter_or(*this, "square_edge_s", .005);
+        sine_frequency_ = parameter_or(*this, "sine_frequency_hz", 1.);
+        sine_cycles_ = parameter_or(*this, "sine_cycles", 20);
+        sine_ramp_ = parameter_or(*this, "sine_ramp_s", 1.);
         gravity_enabled_ = parameter_or(*this, "pitch_gravity_enabled", false);
         gravity_ = {
             parameter_or(*this, "pitch_gravity_cos_nm", 0.),
@@ -295,8 +303,7 @@ public:
         for (std::size_t i = 0; i < excitation_.size(); ++i) {
             const double feedforward = i == 1 ? gravity_torque : 0.;
             *excitation_[i] = excitation[i];
-            *control_torque_[i] =
-                std::clamp(excitation[i] + feedforward, -torque_limit_, torque_limit_);
+            *control_torque_[i] = std::clamp(excitation[i] + feedforward, -limit_, limit_);
         }
     }
 
@@ -304,11 +311,20 @@ private:
     void set_state(State state) { *state_ = static_cast<int>(state); }
 
     void validate() {
-        if (!std::isfinite(torque_limit_) || torque_limit_ <= 0. || torque_limit_ > 4.5)
+        if (!std::isfinite(torque_limit_) || torque_limit_ < 0.)
             throw std::invalid_argument(
-                "torque_limit_nm must be finite, positive and within the LK MG4010 4.5 Nm rating");
+                "torque_limit_nm must be finite and non-negative (0 disables the clamp)");
+        if (torque_limit_ > 4.5)
+            RCLCPP_WARN(
+                get_logger(), "torque_limit_nm %.2f Nm exceeds the LK MG4010 4.5 Nm rating",
+                torque_limit_);
+        limit_ = torque_limit_ > 0. ? torque_limit_ : std::numeric_limits<double>::infinity();
+        if (!std::isfinite(calibration_limit_) || calibration_limit_ <= 0.
+            || calibration_limit_ > 4.5)
+            throw std::invalid_argument(
+                "calibration_torque_limit_nm must be finite, positive and within 4.5 Nm");
         for (const double amplitude : amplitude_)
-            if (!std::isfinite(amplitude) || amplitude <= 0. || amplitude > torque_limit_)
+            if (!std::isfinite(amplitude) || amplitude <= 0. || amplitude > limit_)
                 throw std::invalid_argument(
                     "Torque amplitudes must be finite, positive and within torque_limit_nm");
         if (!std::isfinite(frequency_start_) || frequency_start_ <= 0.
@@ -323,6 +339,10 @@ private:
             || !std::isfinite(square_edge_) || square_edge_ < 0.
             || 2. * square_edge_ > square_period_)
             throw std::invalid_argument("Invalid square wave period/cycles/edge");
+        if (!std::isfinite(sine_frequency_) || sine_frequency_ <= 0. || sine_cycles_ < 1
+            || !std::isfinite(sine_ramp_) || sine_ramp_ < 0.
+            || 2. * sine_ramp_ > sine_cycles_ / sine_frequency_)
+            throw std::invalid_argument("Invalid sine frequency/cycles/ramp");
         if (!std::isfinite(pitch_min_) || !std::isfinite(pitch_max_) || pitch_min_ >= pitch_max_
             || !std::isfinite(yaw_travel_limit_) || yaw_travel_limit_ <= 0.)
             throw std::invalid_argument("Invalid angle limits");
@@ -407,6 +427,7 @@ private:
         case Experiment::kChirp: return duration_;
         case Experiment::kStaircase: return staircase_steps_ * staircase_dwell_;
         case Experiment::kSquare: return square_cycles_ * square_period_;
+        case Experiment::kSine: return sine_cycles_ / sine_frequency_;
         case Experiment::kCalibration:
         case Experiment::kHold: return 0.;
         }
@@ -461,6 +482,19 @@ private:
             *step_ = int(index) + 1;
             return;
         }
+        case Experiment::kSine: {
+            const double phase = 2. * kPi * sine_frequency_ * local;
+            const double span = sine_cycles_ / sine_frequency_;
+            double fade = 1.;
+            if (sine_ramp_ > 0. && (local < sine_ramp_ || local > span - sine_ramp_)) {
+                const double t = local < sine_ramp_ ? local : span - local;
+                fade = .5 - .5 * std::cos(kPi * t / sine_ramp_);
+            }
+            excitation[axis] = amplitude_[axis] * fade * std::sin(phase);
+            *frequency_ = sine_frequency_;
+            *step_ = int(local * sine_frequency_) + 1;
+            return;
+        }
         case Experiment::kCalibration:
         case Experiment::kHold: return;
         }
@@ -508,7 +542,7 @@ private:
         // the gravity model.
         const bool settled = time - calibration_since_ >= .98 * calibration_dwell_
                           && last_sample_ != index && std::abs(*velocity_[1]) < .03
-                          && std::abs(excitation[1]) < torque_limit_ - 1e-3;
+                          && std::abs(excitation[1]) < calibration_limit_ - 1e-3;
         if (settled) {
             calibration_samples_.push_back({pitch, excitation[1]});
             last_sample_ = index;
@@ -519,7 +553,7 @@ private:
         const double error = wrap(setpoint - pitch);
         const double unsaturated =
             calibration_kp_ * error + calibration_ki_ * calibration_integral_;
-        const double torque = std::clamp(unsaturated, -torque_limit_, torque_limit_);
+        const double torque = std::clamp(unsaturated, -calibration_limit_, calibration_limit_);
         // Anti-windup: integrate only while the command is not saturated.
         // Anti-windup on saturation only: an error gate would deadlock once the
         // steady tracking error sits above it.
@@ -612,9 +646,12 @@ private:
     }
 
     Experiment experiment_ = Experiment::kHold;
-    double torque_limit_ = 1.5, frequency_start_ = .2, frequency_end_ = 5.;
+    double torque_limit_ = 4.5, calibration_limit_ = 1.5, limit_ = 4.5;
+    double frequency_start_ = .2, frequency_end_ = 5.;
     double duration_ = 60., ramp_ = 2., settle_ = 2.;
     double staircase_dwell_ = 2., square_period_ = 10., square_edge_ = .005;
+    double sine_frequency_ = 1., sine_ramp_ = 1.;
+    int sine_cycles_ = 20;
     double calibration_dwell_ = 1.5, calibration_kp_ = 6., calibration_ki_ = 3.;
     double calibration_rate_ = .6;
     double pitch_min_ = -.6109, pitch_max_ = .5236, yaw_travel_limit_ = .3490658503988659;

@@ -56,7 +56,7 @@ if(BUILD_TESTING)
         RMCS_GIMBAL_PROFILE="${PROJECT_SOURCE_DIR}/../rmcs_bringup/config/wheel-leg-gimbal-sweep.yaml"
         RMCS_GIMBAL_CSV="${CMAKE_CURRENT_BINARY_DIR}/gimbal_frequency_sweep_test.csv")
     target_link_libraries(gimbal_frequency_sweep_integration ${PROJECT_NAME})
-    foreach(experiment IN ITEMS chirp staircase square calibration)
+    foreach(experiment IN ITEMS chirp staircase square calibration sine)
         ament_add_gtest(gimbal_torque_sweep_${experiment}_integration
             test/gimbal_torque_sweep_integration.cpp)
         target_include_directories(gimbal_torque_sweep_${experiment}_integration PRIVATE

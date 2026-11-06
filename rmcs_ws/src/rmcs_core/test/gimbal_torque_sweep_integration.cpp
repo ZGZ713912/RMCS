@@ -188,14 +188,14 @@ public:
                 ++violations;
         for (std::size_t i = 0; i < control_.size(); ++i) {
             const double command = *control_[i];
-            if (!std::isfinite(command) || std::abs(command) > 1.5 + 1e-9)
+            if (!std::isfinite(command) || std::abs(command) > 4.5 + 1e-9)
                 ++violations;
             if (!*enabled_ && command != 0.)
                 ++violations;
         }
         if (std::abs(*angle_[1]) > .62)
             ++violations;
-        if (*experiment_ < 0 || *experiment_ > 4 || *state_ < 0 || *state_ > 6)
+        if (*experiment_ < 0 || *experiment_ > 5 || *state_ < 0 || *state_ > 6)
             ++violations;
 
         const double yaw_offset = std::abs(*control_[0] - *excitation_[0]);
@@ -327,10 +327,11 @@ TEST(GimbalTorqueSweep, DeployedOpenLoopGraph) {
         phase = run_phase;
         ASSERT_TRUE(
             await([&] { return observe->enabled.load() && observe->state.load() == 2; }, 2000ms));
-        const int expected_experiment = experiment == "chirp"     ? 1
-                                      : experiment == "staircase" ? 2
-                                      : experiment == "square"    ? 3
-                                                                  : 4;
+        const int expected_experiment = experiment == "chirp"       ? 1
+                                      : experiment == "staircase"   ? 2
+                                      : experiment == "square"      ? 3
+                                      : experiment == "calibration" ? 4
+                                                                    : 5;
         EXPECT_EQ(observe->experiment_id.load(), expected_experiment);
         EXPECT_EQ(observe->axis.load(), run_phase == 3 ? 2 : 1);
 
@@ -361,6 +362,10 @@ TEST(GimbalTorqueSweep, DeployedOpenLoopGraph) {
             EXPECT_NEAR(observe->yaw_min.load(), -.35, 1e-6);
             EXPECT_LT(observe->max_yaw_delta.load(), .35 * .2);
             EXPECT_GT(observe->max_yaw_delta.load(), .0);
+        } else if (experiment == "sine") {
+            EXPECT_NEAR(observe->max_frequency.load(), 2.0, .01);
+            EXPECT_GT(observe->max_yaw_abs.load(), .2);
+            EXPECT_LE(observe->max_yaw_abs.load(), .35 + 1e-6);
         } else {
             // cos and the constant term are nearly collinear over +-30 deg, so
             // the coefficients themselves are only weakly identifiable; the
@@ -423,6 +428,14 @@ int main(int argc, char** argv) {
         "gimbal_torque_sweep:square_cycles:=2",
         "-p",
         "gimbal_torque_sweep:square_edge_s:=0.02",
+        "-p",
+        "gimbal_torque_sweep:yaw_torque_amplitude_nm:=0.35",
+        "-p",
+        "gimbal_torque_sweep:sine_frequency_hz:=2.0",
+        "-p",
+        "gimbal_torque_sweep:sine_cycles:=4",
+        "-p",
+        "gimbal_torque_sweep:sine_ramp_s:=0.05",
         "-p",
         "gimbal_torque_sweep:pitch_gravity_enabled:=true",
         "-p",

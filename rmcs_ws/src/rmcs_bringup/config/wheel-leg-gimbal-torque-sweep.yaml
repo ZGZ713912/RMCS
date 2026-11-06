@@ -11,6 +11,7 @@
 #   chirp       对数 chirp 力矩扫频，宽频传递函数
 #   staircase   力矩阶梯，死区/库仑摩擦/pitch 重力矩
 #   square      对称力矩方波，时域阶跃/齿隙
+#   sine        固定频率大幅力矩正弦，高速段：极值处 v=0 的加速过程 + 高速阻尼环
 #   calibration 先标定 pitch 重力矩曲线（仅 pitch，中/上 启动）
 #
 # DR16 [左,右]：中/中=保持；上/中=yaw；中/上=pitch；上/上=先 yaw 后 pitch。
@@ -50,10 +51,15 @@ gimbal_torque_sweep:
   ros__parameters:
     experiment: chirp
 
-    # 两轴都是 LK MG4010-Ei10（额定 4.5 Nm）；这里是软件总限幅，超限直接抛异常。
-    # 幅值必须 <= 限幅；chirp/方波峰值就是它，阶梯只在这条带内走。
-    torque_limit_nm: 1.5
-    yaw_torque_amplitude_nm: 0.35
+    # 两轴都是 LK MG4010-Ei10，厂商额定 4.5 Nm。驱动只按电流编码范围裁剪
+    # （±2048 counts，关节侧约 ±23 Nm），并不会按 4.5 Nm 裁剪。这里的软件限幅：
+    #   4.5 = 电机额定；填 0 = 关闭软件限幅，只剩驱动电流范围。
+    # 标定的保位 PI 单独用 calibration_torque_limit_nm，避免保位时就冲到满力矩。
+    torque_limit_nm: 4.5
+    calibration_torque_limit_nm: 1.5
+    # yaw 可多圈旋转，没有行程限位，所以幅值只受力矩与速度保护约束；
+    # 2.5 Nm @1 Hz 在 J≈0.1 上约 ±36 deg / 230 deg/s，J≈0.05 时约 ±73 deg / 460 deg/s。
+    yaw_torque_amplitude_nm: 2.5
     pitch_torque_amplitude_nm: 0.25
 
     # chirp：对数扫频 + 首尾 raised-cosine 渐入渐出，弧度/rad/s/Nm。
@@ -76,6 +82,13 @@ gimbal_torque_sweep:
     square_cycles: 6
     square_edge_s: 0.005
 
+    # sine：固定频率、零均值力矩正弦，首尾 raised-cosine 渐入渐出。
+    # 每个半周期两端速度过零，是天然的加速过程（J = tau / alpha）；
+    # 中段速度最高，直接给高速阻尼数据。
+    sine_frequency_hz: 1.0
+    sine_cycles: 20
+    sine_ramp_s: 1.0
+
     # pitch 保持力矩模型：tau = cos*cos(theta) + sin*sin(theta) + const。
     # 系数由 calibration 实验给出；未标定前保持 false，pitch 中/中 档不托举。
     pitch_gravity_enabled: false
@@ -92,11 +105,13 @@ gimbal_torque_sweep:
     # 参考角斜坡速率，保证准静态而不是一步跳到下一个角度。
     calibration_rate_rad_s: 0.6
 
-    # 安全包络：yaw 离捕获中心 20 deg；pitch 与实车一致 down 35 deg / up 30 deg。
-    yaw_travel_limit_rad: 0.3490658503988659
+    # 安全包络：yaw 可多圈旋转，行程保护形同关闭（wrap 后 |Δ|<=pi，>pi 永不触发）；
+    # pitch 与实车一致 down 35 deg / up 30 deg。
+    yaw_travel_limit_rad: 3.15
     pitch_min_rad: -0.6109
     pitch_max_rad: 0.5236
-    max_velocity_rad_s: 3.0
+    # yaw 多圈后速度保护是主要防线：sine 在 4.5 Nm/1 Hz 下可达 400 deg/s 以上。
+    max_velocity_rad_s: 15.0
     feedback_timeout_s: 0.1
 
 value_collector:
