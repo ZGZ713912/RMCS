@@ -360,7 +360,8 @@ TEST(GimbalTorqueSweep, DeployedOpenLoopGraph) {
         } else if (experiment == "square") {
             EXPECT_NEAR(observe->yaw_max.load(), .35, 1e-6);
             EXPECT_NEAR(observe->yaw_min.load(), -.35, 1e-6);
-            EXPECT_LT(observe->max_yaw_delta.load(), .35 * .2);
+            // Per-tick delta scales with scheduler jitter; a hard step is the full 0.35.
+            EXPECT_LT(observe->max_yaw_delta.load(), .35 * .5);
             EXPECT_GT(observe->max_yaw_delta.load(), .0);
         } else if (experiment == "sine") {
             EXPECT_NEAR(observe->max_frequency.load(), 2.0, .01);

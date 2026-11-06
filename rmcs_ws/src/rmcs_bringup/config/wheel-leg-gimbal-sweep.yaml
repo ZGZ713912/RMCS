@@ -12,6 +12,7 @@ rmcs_executor:
     components:
       - rmcs_core::hardware::WheelLegDualBoard -> wheel_leg
       - rmcs_core::controller::identification::GimbalFrequencySweepController -> gimbal_sweep
+      - rmcs_core::controller::gimbal::PitchGravityFeedforward -> pitch_gravity_ff
       - rmcs_core::controller::pid::ErrorPidController -> yaw_angle_pid_controller
       - rmcs_core::controller::pid::PidController -> yaw_velocity_pid_controller
       - rmcs_core::controller::pid::ErrorPidController -> pitch_angle_pid_controller
@@ -100,12 +101,19 @@ pitch_velocity_pid_controller:
     measurement: /gimbal/pitch/velocity_imu
     setpoint: /gimbal/pitch/control_velocity
     control: /gimbal/pitch/control_torque
+    feedforward: /gimbal/pitch/torque_ff
     reset_interface: /chassis/reset_count
     kp: 1.0
     ki: 0.0
     kd: 0.0
     output_min: -2.0
     output_max: 2.0
+
+# deformable 同款两参数模型：tau_ff = gain * sin(pitch_angle - phase)，Nm / rad，手调。
+pitch_gravity_ff:
+  ros__parameters:
+    pitch_gravity_ff_gain: 0.0
+    pitch_gravity_ff_phase: 0.0
 
 value_collector:
   ros__parameters:
@@ -141,6 +149,7 @@ value_collector:
       - /gimbal/pitch/angle
       - /gimbal/pitch/velocity
       - /gimbal/pitch/velocity_imu
+      - /gimbal/pitch/torque_ff
       - /gimbal/pitch/control_angle_error
       - /gimbal/pitch/control_velocity
       - /gimbal/pitch/control_torque

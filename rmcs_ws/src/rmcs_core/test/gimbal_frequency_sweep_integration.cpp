@@ -110,6 +110,7 @@ public:
         register_input("/gimbal/sweep/completed", completed_);
         register_input("/gimbal/sweep/frequency_hz", frequency_);
         register_input("/wheel_leg/enable_request", drive_enable_);
+        register_input("/gimbal/pitch/torque_ff", torque_ff_);
         register_input("/chassis/reset_count", resets_);
         for (std::size_t i = 0; i < parked.size(); ++i)
             register_input(std::string{parked[i]} + "/control_torque", parked_torque_[i]);
@@ -150,6 +151,7 @@ public:
         completed = *completed_;
         state = *state_;
         axis = *axis_;
+        torque_ff = *torque_ff_;
         frequency = *frequency_;
         resets = *resets_;
         yaw_reference = *reference_[0];
@@ -158,12 +160,14 @@ public:
     }
 
     std::atomic<int> state{0}, axis{0}, violations{0};
+    std::atomic<double> torque_ff{0.};
     std::atomic<bool> enabled{false}, completed{false};
     std::atomic<double> frequency{0.}, yaw_reference{0.}, pitch_reference{0.};
     std::atomic<std::size_t> resets{0}, ticks{0};
 
 private:
     InputInterface<int> state_, axis_;
+    InputInterface<double> torque_ff_;
     InputInterface<bool> enabled_, completed_, drive_enable_;
     InputInterface<double> frequency_;
     InputInterface<std::size_t> resets_;
@@ -197,8 +201,10 @@ TEST(GimbalSweepIntegration, DeployedDoublePidGraphSweepStopResetAndParkedOutput
             ~Shutdown() { rclcpp::shutdown(); }
         } shutdown;
         executor.add_component(feedback);
+        // pitch_gravity_ff is wired into pitch_velocity_pid_controller.feedforward by the YAML.
         constexpr std::array names{
             "gimbal_sweep",
+            "pitch_gravity_ff",
             "yaw_angle_pid_controller",
             "yaw_velocity_pid_controller",
             "pitch_angle_pid_controller",
@@ -206,6 +212,7 @@ TEST(GimbalSweepIntegration, DeployedDoublePidGraphSweepStopResetAndParkedOutput
             "value_collector"};
         constexpr std::array types{
             "rmcs_core::controller::identification::GimbalFrequencySweepController",
+            "rmcs_core::controller::gimbal::PitchGravityFeedforward",
             "rmcs_core::controller::pid::ErrorPidController",
             "rmcs_core::controller::pid::PidController",
             "rmcs_core::controller::pid::ErrorPidController",
@@ -223,6 +230,8 @@ TEST(GimbalSweepIntegration, DeployedDoublePidGraphSweepStopResetAndParkedOutput
         ASSERT_TRUE(await([&] { return observe->enabled && observe->state == 1; }));
         EXPECT_NEAR(observe->yaw_reference, yaw_center, 1e-10);
         EXPECT_NEAR(observe->pitch_reference, pitch_center, 1e-10);
+        // gain 0.5 / phase 0.1 from the test overrides.
+        EXPECT_NEAR(observe->torque_ff.load(), .5 * std::sin(pitch_center - .1), 1e-9);
         // Double-middle is manual: the left stick moves the reference, and the
         // reference holds where the stick left it.
         stick = .5;
@@ -298,7 +307,11 @@ int main(int argc, char** argv) {
         "-p",
         "gimbal_sweep:settle_s:=0.02",
         "-p",
-        "value_collector:csv_path:=" RMCS_GIMBAL_CSV};
+        "value_collector:csv_path:=" RMCS_GIMBAL_CSV,
+        "-p",
+        "pitch_gravity_ff:pitch_gravity_ff_gain:=0.5",
+        "-p",
+        "pitch_gravity_ff:pitch_gravity_ff_phase:=0.1"};
     rclcpp::init(static_cast<int>(args.size()), args.data());
     const int result = RUN_ALL_TESTS();
     if (rclcpp::ok())
