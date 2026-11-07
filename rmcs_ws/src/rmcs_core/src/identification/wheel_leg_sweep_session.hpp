@@ -29,12 +29,12 @@ enum class SweepStop : int {
     kEnableLost = 10
 };
 
-// Level-triggered remote handling, like ChassisController. No arming sequence,
-// debounce, drive acknowledgement timeout, or latched restart interlock.
+// Level-triggered remote handling with optional completion hold for wheel real2sim.
 class WheelLegSweepSession {
 public:
-    explicit WheelLegSweepSession(bool joints)
-        : joints_(joints) {}
+    explicit WheelLegSweepSession(bool joints, bool hold_completion = false)
+        : joints_(joints)
+        , hold_completion_(hold_completion) {}
 
     bool update(
         double now, bool remote_fresh, rmcs_msgs::Switch left, rmcs_msgs::Switch right,
@@ -45,17 +45,26 @@ public:
             return false;
         }
         if (left == Switch::DOWN && right == Switch::DOWN) {
+            completion_latched_ = false;
             state = SweepState::kResetReady;
             reason = SweepStop::kBothDown;
             mode = 0;
             completed = false;
             return false;
         }
+        const bool middle_now = left == Switch::MIDDLE && right == Switch::MIDDLE;
+        if (middle_now)
+            completion_latched_ = false;
         if (health != SweepStop::kNone) {
             fault(health);
             return false;
         }
-        const bool middle_now = left == Switch::MIDDLE && right == Switch::MIDDLE;
+        if (completion_latched_) {
+            state = SweepState::kComplete;
+            reason = SweepStop::kFinished;
+            completed = true;
+            return false;
+        }
         const int selected = joints_ ? (left == Switch::UP && right == Switch::MIDDLE   ? 1
                                         : left == Switch::MIDDLE && right == Switch::UP ? 2
                                         : left == Switch::UP && right == Switch::UP     ? 3
@@ -80,6 +89,7 @@ public:
     }
 
     void complete() {
+        completion_latched_ = hold_completion_;
         state = SweepState::kComplete;
         completed = true;
         reason = SweepStop::kFinished;
@@ -104,6 +114,7 @@ public:
 
 private:
     bool joints_;
+    bool hold_completion_ = false, completion_latched_ = false;
 };
 
 } // namespace rmcs_core::controller::identification

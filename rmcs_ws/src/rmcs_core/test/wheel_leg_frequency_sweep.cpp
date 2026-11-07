@@ -121,6 +121,25 @@ TEST(FrequencySweepSession, HeldModeRepeatsAfterCompletionWithoutACompletionLatc
         EXPECT_DOUBLE_EQ(session.start_time, 10);
     }
 }
+TEST(FrequencySweepSession, Real2simCompletionRequiresMiddleOrResetEvenAfterFeedbackLoss) {
+    WheelLegSweepSession session(false, true);
+    ASSERT_TRUE(session.update(0, true, Switch::UP, Switch::MIDDLE, SweepStop::kNone));
+    session.complete();
+    EXPECT_FALSE(session.update(1, true, Switch::UP, Switch::UP, SweepStop::kNone));
+    EXPECT_EQ(session.state, SweepState::kComplete);
+    EXPECT_EQ(session.run_id, 1u);
+    session.update(2, false, Switch::UNKNOWN, Switch::UNKNOWN, SweepStop::kNone);
+    EXPECT_FALSE(session.enabled());
+    EXPECT_FALSE(session.update(3, true, Switch::UP, Switch::UP, SweepStop::kNone));
+    EXPECT_EQ(session.state, SweepState::kComplete);
+    session.update(4, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone);
+    EXPECT_TRUE(session.update(5, true, Switch::UP, Switch::MIDDLE, SweepStop::kNone));
+    session.complete();
+    session.update(6, true, Switch::DOWN, Switch::DOWN, SweepStop::kNone);
+    EXPECT_FALSE(session.enabled());
+    EXPECT_TRUE(session.update(7, true, Switch::UP, Switch::MIDDLE, SweepStop::kNone));
+}
+
 TEST(FrequencySweepSession, EitherIntermediateJointModeImmediatelyYieldsToBothUp) {
     for (const auto switches :
          {std::array{Switch::UP, Switch::MIDDLE}, std::array{Switch::MIDDLE, Switch::UP}}) {
@@ -483,6 +502,68 @@ TEST(FrequencySweepWheels, HighSpeedHasBothDirectionsDirectCoastAndIndependentVa
     for (auto side : covered)
         EXPECT_TRUE(side[0] && side[1]);
     EXPECT_DOUBLE_EQ(segments[2].start_s, 11);
+}
+
+TEST(FrequencySweepWheels, Real2simCoversFourConditionsAndHeldoutWithinTenMinutes) {
+    auto c = wheel_config();
+    c.high_speed_target = 65;
+    c.real2sim = true;
+    const WheelProbePlan plan(c);
+    EXPECT_DOUBLE_EQ(plan.duration(), 555);
+    EXPECT_DOUBLE_EQ(plan.max_target_speed(), 65);
+    EXPECT_NE(plan.manifest_json().find("wheel_real2sim_v1"), std::string::npos);
+    int platforms = 0, peaks = 0, coasts = 0, training = 0, validation = 0, both = 0;
+    std::array<std::array<bool, 2>, 2> covered{};
+    for (const auto& segment : plan.segments()) {
+        if (segment.label.ends_with("platform_hold"))
+            ++platforms;
+        if (segment.label.ends_with("peak_plateau")) {
+            ++peaks;
+            covered[segment.axis_scale[0] ? 0 : 1][segment.to > 0 ? 0 : 1] = true;
+        }
+        if (segment.label.ends_with("peak_coast")) {
+            ++coasts;
+            EXPECT_TRUE(segment.coast);
+        }
+        if (segment.waveform == 9) {
+            segment.validation ? ++validation : ++training;
+            EXPECT_DOUBLE_EQ(segment.duration_s, 24);
+            EXPECT_DOUBLE_EQ(segment.phase, segment.validation ? 1.27 : .31);
+            EXPECT_DOUBLE_EQ(std::abs(segment.to), 35.75);
+        }
+        if (segment.axis_scale[0] != 0 && segment.axis_scale[1] != 0) {
+            ++both;
+            EXPECT_TRUE(segment.validation);
+        }
+        for (double t = 0; t < segment.duration_s; t += .017) {
+            const auto sample = plan.at(segment.start_s + t);
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                EXPECT_LE(std::abs(sample.velocity_target[axis]), 65 + 1e-12);
+                EXPECT_LE(std::abs(sample.probe_torque[axis]), .35 + 1e-12);
+                if (segment.coast || segment.axis_scale[axis] == 0) {
+                    EXPECT_FALSE(sample.servo[axis]);
+                    EXPECT_DOUBLE_EQ(sample.velocity_target[axis], 0);
+                    EXPECT_DOUBLE_EQ(sample.probe_torque[axis], 0);
+                }
+            }
+        }
+    }
+    EXPECT_EQ(platforms, 12);
+    EXPECT_EQ(peaks, 4);
+    EXPECT_EQ(coasts, 4);
+    EXPECT_EQ(training, 4);
+    EXPECT_EQ(validation, 4);
+    EXPECT_EQ(both, 8);
+    for (const auto& side : covered)
+        EXPECT_TRUE(side[0] && side[1]);
+    c.high_speed_only = true;
+    EXPECT_THROW(WheelProbePlan{c}, std::invalid_argument);
+    c.high_speed_only = false;
+    c.coast_s = 60;
+    EXPECT_THROW(WheelProbePlan{c}, std::invalid_argument);
+    c.coast_s = 3;
+    c.high_speed_target = 0;
+    EXPECT_THROW(WheelProbePlan{c}, std::invalid_argument);
 }
 
 TEST(FrequencySweepWheels, HighSpeedIsOptInAndFullSweepRetainsLowSpeedBand) {

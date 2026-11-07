@@ -22,6 +22,7 @@ struct WheelProbeConfig {
     // Opt-in extension for the standalone sweep; legacy recording stays unchanged.
     double high_speed_target = 0, high_speed_probe_nm = .35;
     bool high_speed_only = false;
+    bool real2sim = false;
 };
 
 struct WheelProbeSample {
@@ -72,6 +73,15 @@ public:
             throw std::invalid_argument("Wheel sequence lacks settling or repeated excitation");
         max_target_speed_ = c.speeds.back();
         add("initial_zero_current", {0, 0}, 0, 0, c.coast_s, 0, true);
+        if (c.real2sim) {
+            if (!high_speed_ || c.high_speed_only)
+                throw std::invalid_argument("Real2sim requires a top speed and its own sequence");
+            add_real2sim(c);
+            if (duration_s_ > 600)
+                throw std::invalid_argument("Real2sim sequence exceeds ten minutes");
+            max_target_speed_ = c.high_speed_target;
+            return;
+        }
         if (high_speed_) {
             add_high_speed(c);
             if (c.high_speed_only) {
@@ -241,7 +251,9 @@ public:
     [[nodiscard]] std::string manifest_json() const {
         std::ostringstream out;
         out << std::setprecision(17) << "{\"revision\":\""
-            << (high_speed_ ? "wheel_high_speed_v1" : kRevision)
+            << (real2sim_     ? "wheel_real2sim_v1"
+                : high_speed_ ? "wheel_high_speed_v1"
+                              : kRevision)
             << "\",\"reference_frequency_hz\":" << (high_speed_ ? 200 : kReferenceHz)
             << ",\"duration_s\":" << duration_s_ << ",\"segments\":[";
         for (std::size_t i = 0; i < segments_.size(); ++i) {
@@ -262,6 +274,50 @@ public:
     }
 
 private:
+    void add_real2sim(const WheelProbeConfig& c) {
+        real2sim_ = true;
+        const double top = c.high_speed_target;
+        for (const auto axes : {std::array{1., 0.}, std::array{0., 1.}}) {
+            const std::string side = axes[0] ? "left_" : "right_";
+            for (double sign : {1., -1.}) {
+                const auto prefix = "real2sim_" + side + (sign > 0 ? "positive_" : "negative_");
+                double previous = 0;
+                for (double speed : {c.low_speeds.back(), c.speeds[2], top * .55}) {
+                    const double target = sign * speed;
+                    add(prefix + "platform_entry", axes, previous, target, 3, 1);
+                    add(prefix + "platform_hold", axes, target, target, 5, 10);
+                    previous = target;
+                }
+                add(prefix + "peak_runup", axes, previous, sign * top, 6, 1);
+                add(prefix + "peak_plateau", axes, sign * top, sign * top, 8, 10);
+                add(prefix + "peak_coast", axes, 0, 0, 10, 0, true);
+                add(prefix + "recover_zero", axes, 0, 0, 4, 3);
+                const double bias = sign * top * .55;
+                add(prefix + "bias_entry", axes, 0, bias, 4, 1);
+                add(prefix + "bias_chirp", axes, bias, bias, 16, 11, false, false, .04 * top, .3,
+                    8);
+                segments_.back().phase = .31;
+                for (bool validation : {false, true}) {
+                    add(prefix + "torque_probe", axes, bias, bias, 24, 9, false, validation);
+                    segments_.back().probe_nm = c.high_speed_probe_nm;
+                    segments_.back().phase = validation ? 1.27 : .31;
+                }
+                add(prefix + "zero_entry", axes, bias, 0, 4, 1);
+                add(prefix + "end_zero_current", axes, 0, 0, 4, 0, true);
+            }
+        }
+        for (const auto axes : {std::array{1., 1.}, std::array{1., -1.}}) {
+            const std::string prefix =
+                axes[1] > 0 ? "real2sim_both_same_" : "real2sim_both_opposite_";
+            const double bias = c.speeds[2];
+            add(prefix + "entry", axes, 0, bias, 3, 1, false, true);
+            add(prefix + "chirp", axes, bias, bias, 12, 11, false, true, 2, .3, 8);
+            segments_.back().phase = 1.27;
+            add(prefix + "exit", axes, bias, 0, 3, 1, false, true);
+            add(prefix + "zero_current", axes, 0, 0, 2, 0, true, true);
+        }
+    }
+
     void add_high_speed(const WheelProbeConfig& c) {
         const double top = c.high_speed_target;
         for (const auto axes : {std::array{1., 0.}, std::array{0., 1.}}) {
@@ -328,7 +384,7 @@ private:
     }
     std::vector<Segment> segments_;
     double duration_s_ = 0, max_target_speed_ = 0;
-    bool high_speed_ = false;
+    bool high_speed_ = false, real2sim_ = false;
 };
 
 } // namespace rmcs_core::controller::identification

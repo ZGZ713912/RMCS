@@ -31,7 +31,10 @@ public:
     WheelLegFrequencySweepController()
         : Node{get_component_name(), node::options()}
         , geometry_{load_geometry("left"), load_geometry("right")}
-        , session_(get_parameter("experiment").as_string() == "joints") {
+        , session_(
+              get_parameter("experiment").as_string() == "joints",
+              get_parameter("experiment").as_string() == "wheels"
+                  && get_parameter_or("wheel_real2sim", false)) {
         load_parameters();
         register_input("/predefined/update_rate", update_rate_);
         register_input("/predefined/update_count", tick_);
@@ -74,7 +77,9 @@ public:
         register_output("/wheel_leg/sweep/reference_active", reference_active_, false);
         register_output(
             "/wheel_leg/sweep/excitation_revision", excitation_revision_,
-            kind_ == 1 && wheel_top_speed_ > 0 ? 5 : 4);
+            kind_ == 1 && get_parameter_or("wheel_real2sim", false) ? 6
+            : kind_ == 1 && wheel_top_speed_ > 0                    ? 5
+                                                                    : 4);
         register_output("/wheel_leg/sweep/wheel_high_speed", wheel_high_speed_stage_, false);
         register_output(
             "/wheel_leg/sweep/wheel_high_speed_target_rad_s", wheel_top_speed_output_,
@@ -517,6 +522,7 @@ private:
                 get_parameter_or("wheel_high_speed_target_rad_s", 0.0);
             c.high_speed_probe_nm = get_parameter_or("wheel_high_speed_probe_nm", .35);
             c.high_speed_only = get_parameter_or("wheel_high_speed_only", false);
+            c.real2sim = get_parameter_or("wheel_real2sim", false);
             wheel_plan_ = std::make_unique<WheelProbePlan>(c);
             wheel_kp_ = get_parameter("wheel_velocity_kp").as_double();
             const double amps = get_parameter("wheel_current_limit_a").as_double();
@@ -526,11 +532,12 @@ private:
             wheel_cap_ = amps * wheel_nm_per_amp;
             RCLCPP_INFO(
                 get_logger(),
-                "Wheel sweep: top target=%.2f rad/s (%.1f rpm), high_speed_only=%d, "
+                "Wheel sweep: top target=%.2f rad/s (%.1f rpm), real2sim=%d, high_speed_only=%d, "
                 "duration=%.1f s, current cap=%.1f A; actual top speed requires feedback.",
                 wheel_plan_->max_target_speed(),
                 wheel_plan_->max_target_speed() * 60 / (2 * std::numbers::pi),
-                static_cast<int>(c.high_speed_only), wheel_plan_->duration(), amps);
+                static_cast<int>(c.real2sim), static_cast<int>(c.high_speed_only),
+                wheel_plan_->duration(), amps);
         } else {
             const auto law = get_parameter_or<std::string>("joint_control_law", "pd");
             if (law != "pd" && law != "cascade_pp")

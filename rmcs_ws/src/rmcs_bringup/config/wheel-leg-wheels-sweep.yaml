@@ -1,12 +1,12 @@
 # Standalone identification. See docs/zh-cn/wheel_leg_frequency_sweep.md.
 # Level-triggered remote: DOWN/DOWN off; MIDDLE/MIDDLE zero effort.
-# No reset/arming order, debounce, acknowledgement timeout, or fault/completion latch.
+# No reset/arming order, debounce, or acknowledgement timeout.
 # joints: UP/MIDDLE=1, MIDDLE/UP=2, UP/UP=3; other valid modes are standby.
 # wheels/limits: every valid non-DOWN/DOWN, non-MIDDLE/MIDDLE combination starts.
-# Held matching mode repeats after completion; mode changes take effect immediately.
+# Completion holds zero effort until MIDDLE/MIDDLE or DOWN/DOWN is observed.
 # Angles/speed/tracking/braking are diagnostics ONLY. No envelope exits or auto scaling.
 # Only active motor feedback is needed for control; IMU/parked motors are diagnostic.
-# First 3 s are zero-current baseline, then the high-speed experiment starts.
+# 555 s real2sim sequence, including a 3 s zero-current baseline.
 rmcs_executor:
   ros__parameters:
     update_rate: 1000.0
@@ -57,6 +57,7 @@ frequency_sweep:
     wheel_high_speed_target_rad_s: 65.0
     wheel_high_speed_probe_nm: 0.35
     wheel_high_speed_only: false
+    wheel_real2sim: true
     wheel_low_speeds: [0.15, 0.3, 0.6]
     wheel_speeds: [1.5, 3.0, 6.0, 12.0, 20.0]
     wheel_ramp_s: 1.0
