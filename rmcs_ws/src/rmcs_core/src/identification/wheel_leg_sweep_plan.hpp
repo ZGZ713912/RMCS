@@ -53,7 +53,7 @@ public:
         std::array<double, 4> turn_speeds{.2, .6, 1.5, std::numbers::pi};
         double fast_turn_period_s = 2;
         std::array<double, 2> probe_torque_nm{1, 1};
-        std::array<double, 2> knee_beta_deg{45, 100};
+        std::array<double, 2> knee_beta_deg{40, 100};
         std::array<double, 3> knee_half_periods_s{4, 2, 1};
     };
     struct Sample {
@@ -133,6 +133,7 @@ public:
                         add(pose, {theta, knee_min}, half_period, 7, 0, 0, 0, validation);
                         pose = segments_.back().to;
                     }
+                    add(pose, pose, 3, 1, 0, 0, 0, validation);
                 }
             }
             for (double center : {50.0, 75.0, 95.0}) {

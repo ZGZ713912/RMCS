@@ -60,11 +60,14 @@ frequency_sweep:
     joint_velocity_kp: [4.0, 4.0]
     joint_velocity_target_limit: [8.5, 8.5]
     joint_torque_limit_nm: [40.0, 40.0]
+    joint_load_ki: [20.0, 20.0]
+    joint_load_limit_nm: [16.0, 16.0]
+    joint_load_rate_nm_s: [4.0, 4.0]
     joint_turn_speeds_rad_s: [0.2, 0.6, 1.5, 3.141592653589793]
     joint_fast_turn_period_s: 2.0
-    # Mode 2: continuous 45--100 deg sweeps, 8/4/2 s per round trip.
+    # Mode 2: continuous 40--100 deg sweeps, with bounded load compensation.
     # Reference range lies inside both observed leg ranges; actual loaded motion differs.
-    joint_knee_beta_deg: [45.0, 100.0]
+    joint_knee_beta_deg: [40.0, 100.0]
     joint_knee_half_periods_s: [4.0, 2.0, 1.0]
     # Independent model-coordinate torque probes AFTER the servo, BEFORE final 40 Nm clamp.
     # Waveform=6 uses both axes; mode-2 waveform=3/7 uses the knee only.
@@ -79,6 +82,13 @@ value_collector:
     # tx_queued_steady_ns is host submission time, NOT drive execution time.
     # Torque feedback is the drive current-based estimate, not a torque sensor.
     signals:
+      - /wheel_leg/sweep/actual_beta_min
+      - /wheel_leg/sweep/actual_beta_max
+      - /wheel_leg/sweep/actual_beta_reached_40
+      - /wheel_leg/sweep/left_hip_joint/load_compensation_model
+      - /wheel_leg/sweep/left_knee_joint/load_compensation_model
+      - /wheel_leg/sweep/right_hip_joint/load_compensation_model
+      - /wheel_leg/sweep/right_knee_joint/load_compensation_model
       - /wheel_leg/sweep/experiment
       - /wheel_leg/sweep/side
       - /wheel_leg/sweep/state

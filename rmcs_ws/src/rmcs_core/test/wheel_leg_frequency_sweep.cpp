@@ -7,6 +7,7 @@
 #include "hardware/device/dm_motor.hpp"
 #include "hardware/util/wheel_leg_drive.hpp"
 #include "identification/wheel_leg_limit_probe.hpp"
+#include "identification/wheel_leg_load_compensation.hpp"
 #include "identification/wheel_leg_sweep_session.hpp"
 #include "identification/wheel_leg_wheel_identification_plan.hpp"
 
@@ -31,6 +32,36 @@ PairGeometry geometry(bool right = false) {
 void arm(WheelLegSweepSession& session) {
     EXPECT_FALSE(session.update(0, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
     EXPECT_TRUE(session.enabled());
+}
+
+TEST(FrequencySweepLoad, BoundedRateAntiWindupAndReset) {
+    WheelLegLoadCompensation load;
+    EXPECT_NEAR(load.update(1, 0, 40, .001, 20, 16, 4, false), .004, 1e-12);
+    for (int i = 0; i < 10000; ++i)
+        load.update(1, 0, 40, .001, 20, 16, 4, false);
+    EXPECT_DOUBLE_EQ(load.update(1, 0, 40, .001, 20, 16, 4, false), 16);
+    EXPECT_DOUBLE_EQ(load.update(1, 30, 40, .001, 20, 16, 4, false), 16);
+    EXPECT_LT(load.update(-1, 0, 40, .001, 20, 16, 4, true), 16);
+    load.reset();
+    EXPECT_DOUBLE_EQ(load.update(1, 0, 40, .001, 20, 16, 4, true), 0);
+    EXPECT_DOUBLE_EQ(load.update(1, 40, 40, .001, 20, 16, 4, false), 0);
+    EXPECT_DOUBLE_EQ(load.update(-1, -40, 40, .001, 20, 16, 4, false), 0);
+    load.update(1, 0, 40, .001, 20, 16, 4, false);
+    EXPECT_DOUBLE_EQ(load.update(1, 0, 40, .1, 20, 16, 4, false), 0);
+}
+
+TEST(FrequencySweepLoad, RemovesStaticLoadOffsetWithinAvailableTorque) {
+    WheelLegLoadCompensation load;
+    double q = .1, dq = 0;
+    for (int i = 0; i < 60000; ++i) {
+        const double base = -160 * q - 4 * dq;
+        const double compensation = load.update(-q, base, 40, .001, 20, 16, 4, false);
+        const double torque = std::clamp(base + compensation, -40.0, 40.0);
+        dq += (torque + 12 - 2 * dq) * .001;
+        q += dq * .001;
+    }
+    EXPECT_LT(std::abs(q), .001);
+    EXPECT_LT(std::abs(dq), .001);
 }
 
 TEST(FrequencySweepSession, CurrentSwitchesStartImmediatelyWithoutResetOrMiddleHistory) {
@@ -272,12 +303,17 @@ TEST(FrequencySweepTrajectories, KneeDynamicsHasContinuousSpeedPairsAndIndepende
     for (bool right : {false, true}) {
         auto g = geometry(right);
         WheelLegJointSweepPlan plan(g, right ? 1 : -1);
-        plan.start(2, {0, g.at(70 * rad).position}, 0, 45 * rad, 105 * rad);
-        EXPECT_NEAR(plan.duration(), 224, 1e-10);
+        plan.start(2, {0, g.at(70 * rad).position}, 0, 40 * rad, 105 * rad);
+        EXPECT_NEAR(plan.duration(), 242, 1e-10);
         std::array<int, 2> counts{};
         std::array<int, 3> speed_counts{};
         double probe_energy = 0;
+        int endpoint_holds = 0;
         for (const auto& segment : plan.segments()) {
+            if (segment.kind == 1 && segment.duration == 3) {
+                ++endpoint_holds;
+                EXPECT_NEAR(segment.to.beta / rad, 40, 1e-9);
+            }
             if (segment.kind != 7 && segment.kind != 3)
                 continue;
             const auto start = plan.at(segment.start);
@@ -287,15 +323,15 @@ TEST(FrequencySweepTrajectories, KneeDynamicsHasContinuousSpeedPairsAndIndepende
             if (segment.kind == 7) {
                 ++counts[segment.validation];
                 const auto middle = plan.at(segment.start + segment.duration / 2);
-                EXPECT_NEAR(std::abs(segment.to.beta - segment.from.beta) / rad, 55, 1e-9);
-                EXPECT_NEAR(std::abs(middle.dbeta) / rad, 1.875 * 55 / segment.duration, 1e-8);
+                EXPECT_NEAR(std::abs(segment.to.beta - segment.from.beta) / rad, 60, 1e-9);
+                EXPECT_NEAR(std::abs(middle.dbeta) / rad, 1.875 * 60 / segment.duration, 1e-8);
                 const int speed = segment.duration == 4 ? 0 : segment.duration == 2 ? 1 : 2;
                 ++speed_counts[speed];
             }
             for (double t = .005; t < segment.duration; t += .005) {
                 const auto sample = plan.at(segment.start + t);
                 EXPECT_NEAR(sample.q[0], 0, 1e-12);
-                EXPECT_GE(sample.beta / rad, 45 - 1e-8);
+                EXPECT_GE(sample.beta / rad, 40 - 1e-8);
                 EXPECT_LE(sample.beta / rad, 100 + 1e-8);
                 EXPECT_DOUBLE_EQ(sample.probe_torque[0], 0);
                 EXPECT_LE(std::abs(sample.probe_torque[1]), 1);
@@ -303,6 +339,7 @@ TEST(FrequencySweepTrajectories, KneeDynamicsHasContinuousSpeedPairsAndIndepende
             }
         }
         EXPECT_EQ(counts, (std::array{18, 18}));
+        EXPECT_EQ(endpoint_holds, 6);
         EXPECT_EQ(speed_counts, (std::array{12, 12, 12}));
         EXPECT_GT(probe_energy, 100);
     }

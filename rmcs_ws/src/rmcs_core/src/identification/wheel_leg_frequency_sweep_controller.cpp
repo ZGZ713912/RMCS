@@ -18,6 +18,7 @@
 #include "controller/pid/position_velocity_p.hpp"
 #include "identification/wheel_leg_identification_axes.hpp"
 #include "identification/wheel_leg_limit_probe.hpp"
+#include "identification/wheel_leg_load_compensation.hpp"
 #include "identification/wheel_leg_sweep_session.hpp"
 #include "identification/wheel_leg_wheel_identification_plan.hpp"
 
@@ -79,6 +80,7 @@ public:
             "/wheel_leg/sweep/excitation_revision", excitation_revision_,
             kind_ == 1 && get_parameter_or("wheel_real2sim", false) ? 6
             : kind_ == 1 && wheel_top_speed_ > 0                    ? 5
+            : kind_ == 2                                            ? 7
                                                                     : 4);
         register_output("/wheel_leg/sweep/wheel_high_speed", wheel_high_speed_stage_, false);
         register_output(
@@ -144,6 +146,7 @@ public:
             register_output(out + "/tracking_error", error_[i], nan);
             register_output(out + "/torque_preclip", preclip_[i], 0.0);
             register_output(out + "/probe_torque_model", probe_torque_[i], 0.0);
+            register_output(out + "/load_compensation_model", load_effort_[i], 0.0);
             register_output(out + "/saturated", saturated_[i], false);
             register_output(out + "/diagnostic_flags", diagnostic_[i], std::uint32_t{0});
             if (i < 4) {
@@ -161,6 +164,9 @@ public:
             register_output(end + "/model_angle", probe_q_[i], nan);
             register_output(end + "/beta_estimate", probe_beta_[i], nan);
         }
+        register_output("/wheel_leg/sweep/actual_beta_min", actual_beta_min_, nan);
+        register_output("/wheel_leg/sweep/actual_beta_max", actual_beta_max_, nan);
+        register_output("/wheel_leg/sweep/actual_beta_reached_40", reached_40_, false);
         RCLCPP_INFO(
             get_logger(),
             "Sweep remote=level-v2 experiment=%s side=%d: DOWN/DOWN off, MIDDLE/MIDDLE zero "
@@ -175,7 +181,8 @@ public:
                 get_logger(),
                 "Joint cascade PP: position P=[%.2f,%.2f] 1/s, velocity P=[%.2f,%.2f] "
                 "Nm s/rad, velocity target cap=[%.2f,%.2f] rad/s; "
-                "trajectory velocity feedforward retained; I=0, inner D=0",
+                "trajectory velocity feedforward retained; bounded load I configured separately, "
+                "inner D=0",
                 cascade_gains_[0].position_kp, cascade_gains_[1].position_kp,
                 cascade_gains_[0].velocity_kp, cascade_gains_[1].velocity_kp,
                 cascade_gains_[0].velocity_limit, cascade_gains_[1].velocity_limit);
@@ -203,6 +210,7 @@ public:
         *remote_right_ = static_cast<int>(*right_);
         for (std::size_t i = 0; i < 6; ++i) {
             *torque_[i] = *preclip_[i] = 0;
+            *load_effort_[i] = 0;
             *probe_torque_[i] = 0;
             *velocity_target_[i] = *velocity_error_[i] = 0;
             *velocity_limited_[i] = false;
@@ -242,6 +250,10 @@ public:
             }
         }
         if (started) {
+            for (auto& compensation : load_compensation_)
+                compensation.reset();
+            *actual_beta_min_ = *actual_beta_max_ = nan;
+            *reached_40_ = false;
             last_logged_stage_ = -1;
             last_status_log_ns_ = 0;
             reference_tick_ = *tick_;
@@ -253,7 +265,7 @@ public:
             if (kind_ == 2)
                 RCLCPP_INFO(
                     get_logger(),
-                    "Joint excitation-v4 mode=%d duration=%.1f s, control=%s "
+                    "Joint excitation-v7 mode=%d duration=%.1f s, control=%s "
                     "effective PD hip=%.1f/%.2f knee=%.1f/%.2f; "
                     "fast plateau=%.3f rad/s (%.2f s/rev), torque probes in waveform=3/6/7.",
                     session_.mode, joint_plan_->duration(), cascade_pp_ ? "cascade_pp" : "pd",
@@ -310,6 +322,8 @@ public:
             if (!std::isfinite(*preclip_[i]) || !std::isfinite(*torque_[i]))
                 session_.fault(SweepStop::kNonfinite);
         if (session_.state != SweepState::kRunning) {
+            for (auto& compensation : load_compensation_)
+                compensation.reset();
             *reference_active_ = false;
             for (std::size_t i = 0; i < 6; ++i) {
                 *torque_[i] = 0;
@@ -318,6 +332,18 @@ public:
             }
         }
         *enable_ = session_.enabled();
+        if (kind_ == 2 && session_.state == SweepState::kRunning && *beta_valid_[side_]) {
+            const double beta = *beta_estimate_[side_];
+            *actual_beta_min_ =
+                std::isfinite(*actual_beta_min_) ? std::min(*actual_beta_min_, beta) : beta;
+            *actual_beta_max_ =
+                std::isfinite(*actual_beta_max_) ? std::max(*actual_beta_max_, beta) : beta;
+            *reached_40_ = *reached_40_ || std::abs(beta / PairGeometry::rad - 40) <= 1;
+        }
+        if (session_.state == SweepState::kResetReady) {
+            *actual_beta_min_ = *actual_beta_max_ = nan;
+            *reached_40_ = false;
+        }
         *clear_ = *enable_ && !ready;
         *state_ = static_cast<int>(session_.state);
         *stop_ = static_cast<int>(session_.reason);
@@ -359,6 +385,13 @@ private:
                 static_cast<int>(*left_), static_cast<int>(*right_),
                 static_cast<int>(*feedback_fresh_), static_cast<int>(*drives_ready_output_));
         } else if (session_.state == SweepState::kComplete) {
+            if (kind_ == 2)
+                RCLCPP_WARN(
+                    get_logger(),
+                    "Actual beta coverage: min=%.2f max=%.2f deg, reached 40 +/-1 deg=%d; "
+                    "coverage is not a guarantee of valid unsaturated identification samples.",
+                    *actual_beta_min_ / PairGeometry::rad, *actual_beta_max_ / PairGeometry::rad,
+                    static_cast<int>(*reached_40_));
             RCLCPP_INFO(
                 get_logger(),
                 "Sweep complete: experiment=%s side=%s mode=%d run=%llu elapsed=%.3f s; "
@@ -561,6 +594,17 @@ private:
                 copy("joint_kd", kd_);
             }
             copy("joint_torque_limit_nm", torque_cap_);
+            if (kind_ == 2) {
+                copy("joint_load_ki", load_ki_);
+                copy("joint_load_limit_nm", load_limit_);
+                copy("joint_load_rate_nm_s", load_rate_);
+                for (std::size_t i = 0; i < 2; ++i)
+                    if (!std::isfinite(load_ki_[i]) || load_ki_[i] < 0
+                        || !std::isfinite(load_limit_[i]) || load_limit_[i] < 0
+                        || load_limit_[i] > torque_cap_[i] || !std::isfinite(load_rate_[i])
+                        || load_rate_[i] <= 0)
+                        throw std::invalid_argument("Invalid bounded joint load compensation");
+            }
             for (std::size_t i = 0; i < 2; ++i)
                 if (kp_[i] <= 0 || kd_[i] < 0 || torque_cap_[i] <= 0 || torque_cap_[i] > 40)
                     throw std::invalid_argument("Invalid joint PD/torque cap");
@@ -758,8 +802,14 @@ private:
                                  + kd_[i] * (reference_.dq[i] - *model_dq_[axis])
                                  + reference_.probe_torque[i];
                 }
-                const double requested = model_sign_[axis] * model_effort;
                 const double cap = std::min(torque_cap_[i], *max_torque_[axis]);
+                if (kind_ == 2) {
+                    *load_effort_[axis] = load_compensation_[i].update(
+                        *error_[axis], model_effort, cap, *control_dt_, load_ki_[i], load_limit_[i],
+                        load_rate_[i], *velocity_limited_[axis]);
+                    model_effort += *load_effort_[axis];
+                }
+                const double requested = model_sign_[axis] * model_effort;
                 *preclip_[axis] = requested;
                 *torque_[axis] = std::clamp(requested, -cap, cap);
                 *saturated_[axis] = std::abs(requested) > cap;
@@ -806,6 +856,11 @@ private:
         host_velocity_limit_;
     OutputInterface<int> joint_law_output_;
     OutputInterface<double> wheel_gain_, wheel_limit_;
+    OutputInterface<double> actual_beta_min_, actual_beta_max_;
+    OutputInterface<bool> reached_40_;
+    std::array<OutputInterface<double>, 6> load_effort_;
+    std::array<WheelLegLoadCompensation, 2> load_compensation_;
+    std::array<double, 2> load_ki_{}, load_limit_{}, load_rate_{};
 
     std::array<PairGeometry, 2> geometry_;
     WheelLegSweepSession session_;
