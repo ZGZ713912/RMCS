@@ -221,14 +221,14 @@ TEST(FrequencySweepTrajectories, BothSidesKeepContinuousTurnsAndConfiguredBetaRa
                      h = right ? std::numbers::pi / 2 : -std::numbers::pi / 2;
         for (int mode : {1, 2, 3}) {
             WheelLegJointSweepPlan plan(g, sign);
-            plan.start(mode, {h, h + g.at(70 * rad).position}, h, 35 * rad, 105 * rad);
+            plan.start(mode, {h, h + g.at(70 * rad).position}, h, 35 * rad, 110 * rad);
             double max_theta = 0;
             auto previous = plan.at(0);
             for (double t = .005; t < plan.duration(); t += .02) {
                 const auto x = plan.at(t);
                 EXPECT_TRUE(std::isfinite(x.q[0]) && std::isfinite(x.q[1]));
                 EXPECT_GE(x.beta, 35 * rad - 1e-8);
-                EXPECT_LE(x.beta, 105 * rad + 1e-8);
+                EXPECT_LE(x.beta, 110 * rad + 1e-8);
                 EXPECT_LT(std::abs(x.q[0] - previous.q[0]), .15);
                 EXPECT_LT(std::abs(x.q[1] - previous.q[1]), .15);
                 if (mode == 2) {
@@ -303,7 +303,7 @@ TEST(FrequencySweepTrajectories, KneeDynamicsHasContinuousSpeedPairsAndIndepende
     for (bool right : {false, true}) {
         auto g = geometry(right);
         WheelLegJointSweepPlan plan(g, right ? 1 : -1);
-        plan.start(2, {0, g.at(70 * rad).position}, 0, 40 * rad, 105 * rad);
+        plan.start(2, {0, g.at(70 * rad).position}, 0, 40 * rad, 110 * rad);
         EXPECT_NEAR(plan.duration(), 242, 1e-10);
         std::array<int, 2> counts{};
         std::array<int, 3> speed_counts{};
@@ -323,8 +323,8 @@ TEST(FrequencySweepTrajectories, KneeDynamicsHasContinuousSpeedPairsAndIndepende
             if (segment.kind == 7) {
                 ++counts[segment.validation];
                 const auto middle = plan.at(segment.start + segment.duration / 2);
-                EXPECT_NEAR(std::abs(segment.to.beta - segment.from.beta) / rad, 60, 1e-9);
-                EXPECT_NEAR(std::abs(middle.dbeta) / rad, 1.875 * 60 / segment.duration, 1e-8);
+                EXPECT_NEAR(std::abs(segment.to.beta - segment.from.beta) / rad, 70, 1e-9);
+                EXPECT_NEAR(std::abs(middle.dbeta) / rad, 1.875 * 70 / segment.duration, 1e-8);
                 const int speed = segment.duration == 4 ? 0 : segment.duration == 2 ? 1 : 2;
                 ++speed_counts[speed];
             }
@@ -332,7 +332,7 @@ TEST(FrequencySweepTrajectories, KneeDynamicsHasContinuousSpeedPairsAndIndepende
                 const auto sample = plan.at(segment.start + t);
                 EXPECT_NEAR(sample.q[0], 0, 1e-12);
                 EXPECT_GE(sample.beta / rad, 40 - 1e-8);
-                EXPECT_LE(sample.beta / rad, 100 + 1e-8);
+                EXPECT_LE(sample.beta / rad, 110 + 1e-8);
                 EXPECT_DOUBLE_EQ(sample.probe_torque[0], 0);
                 EXPECT_LE(std::abs(sample.probe_torque[1]), 1);
                 probe_energy += sample.probe_torque[1] * sample.probe_torque[1];

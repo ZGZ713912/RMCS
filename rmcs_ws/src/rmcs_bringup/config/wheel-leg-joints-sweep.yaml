@@ -65,9 +65,9 @@ frequency_sweep:
     joint_load_rate_nm_s: [4.0, 4.0]
     joint_turn_speeds_rad_s: [0.2, 0.6, 1.5, 3.141592653589793]
     joint_fast_turn_period_s: 2.0
-    # Mode 2: continuous 40--100 deg sweeps, with bounded load compensation.
+    # Mode 2: continuous 40--110 deg sweeps, with bounded load compensation.
     # Reference range lies inside both observed leg ranges; actual loaded motion differs.
-    joint_knee_beta_deg: [40.0, 100.0]
+    joint_knee_beta_deg: [40.0, 110.0]
     joint_knee_half_periods_s: [4.0, 2.0, 1.0]
     # Independent model-coordinate torque probes AFTER the servo, BEFORE final 40 Nm clamp.
     # Waveform=6 uses both axes; mode-2 waveform=3/7 uses the knee only.
