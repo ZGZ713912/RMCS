@@ -106,7 +106,7 @@ public:
             node::error("failed to open {}", csv_path_);
             return;
         }
-        csv_file_ << std::setprecision(10);
+        csv_file_ << std::setprecision(17);
 
         csv_file_ << "index";
         for (const auto& unit : units_)

@@ -40,4 +40,14 @@ target_link_libraries(${PROJECT_NAME} librmcs-sdk)
 
 pluginlib_export_plugin_description_file(rmcs_executor plugins.xml)
 
+if(BUILD_TESTING)
+    enable_testing()
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(wheel_leg_sweep_plan test/wheel_leg_frequency_sweep.cpp)
+    target_include_directories(wheel_leg_sweep_plan PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(wheel_leg_sweep_plan ${PROJECT_NAME})
+    ament_add_gtest(wheel_leg_cascade_pp test/wheel_leg_cascade_pp.cpp)
+    target_include_directories(wheel_leg_cascade_pp PRIVATE ${PROJECT_SOURCE_DIR}/src)
+endif()
+
 ament_auto_package()

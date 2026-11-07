@@ -31,10 +31,10 @@
 #include "hardware/device/dm_motor.hpp"
 #include "hardware/device/dr16.hpp"
 #include "hardware/device/lk_motor.hpp"
+#include "hardware/device/lk_motor_drive.hpp"
 #include "hardware/device/remote_control.hpp"
 #include "hardware/device/supercap.hpp"
 #include "hardware/device/wheel_leg_sensor_snapshot.hpp"
-#include "hardware/device/lk_motor_drive.hpp"
 #include "hardware/util/wheel_leg_drive.hpp"
 
 namespace rmcs_core::hardware {
@@ -45,8 +45,8 @@ using LkDriveClock = std::chrono::steady_clock;
 using LkDriveAction = device::LkMotorDriveScheduler::Action;
 
 // Only 0x9A/0x9B echoes advance this stamp, so "replied after clearing" is checkable.
-device::LkMotorDriveScheduler::Feedback lk_feedback(
-    const device::LkMotor& motor, const std::atomic<std::int64_t>& error_stamp_ns) {
+device::LkMotorDriveScheduler::Feedback
+    lk_feedback(const device::LkMotor& motor, const std::atomic<std::int64_t>& error_stamp_ns) {
     device::LkMotorDriveScheduler::Feedback feedback;
     const auto stamp = error_stamp_ns.load(std::memory_order::relaxed);
     if (stamp <= 0)
@@ -96,6 +96,7 @@ public:
         : Node{get_component_name(), node::options()}
         , command_(create_partner_component<Command>(get_component_name() + "_command", *this)) {
         remote_control_ = std::make_unique<device::RemoteControl>(*this);
+        gimbal_only_ = get_parameter_or("gimbal_only", false);
         register_output("/tf", tf_);
         bottom_board_ = std::make_unique<BottomBoard>(
             *this, *command_, get_parameter("serial_filter_bottom_board").as_string());
@@ -116,6 +117,7 @@ public:
     }
 
 private:
+    bool gimbal_only_ = false;
     std::string status_text() const {
         std::ostringstream text;
         text << std::format("    yaw_motor_zero_point: {}\n", bottom_board_->yaw_raw_angle());
@@ -140,8 +142,7 @@ private:
     struct BottomBoard final : librmcs::board::RmcsBoardLite::Callback {
         using Clock = std::chrono::steady_clock;
         using Action = WheelLegDmCommandScheduler::Action;
-        BottomBoard(
-            WheelLeg& status, rmcs_executor::Component& command, const std::string& serial)
+        BottomBoard(WheelLeg& status, rmcs_executor::Component& command, const std::string& serial)
             : status_(status)
             , wheel_motors_(
                   {status, command, "/wheel_leg/left_wheel"},
@@ -157,11 +158,12 @@ private:
             , supercap_(status, command)
             // Chassis BMI088: mounted rotated 180 degrees about body Y, so the
             // sensor axes read (-x, y, -z) relative to the body frame.
-            , bmi088_(device::Bmi088Ekf::Config{
-                  .body_to_sensor =
-                      Eigen::AngleAxisd{std::numbers::pi, Eigen::Vector3d::UnitY()}
-                          .toRotationMatrix(),
-              }) {
+            , bmi088_(
+                  device::Bmi088Ekf::Config{
+                      .body_to_sensor =
+                          Eigen::AngleAxisd{std::numbers::pi, Eigen::Vector3d::UnitY()}
+                              .toRotationMatrix(),
+                  }) {
             status.register_output(
                 "/wheel_leg/imu/quaternion", imu_quaternion_, Eigen::Quaterniond::Identity());
             status.register_output(
@@ -193,6 +195,8 @@ private:
                 "/wheel_leg/feedback_available", feedback_available_output_, false);
             status.register_output("/wheel_leg/dm_control_ready", dm_control_ready_output_, false);
             status.register_output("/wheel_leg/dr16_fresh", dr16_fresh_output_, false);
+            status.register_output(
+                "/gimbal/yaw/feedback_steady_ns", yaw_feedback_output_, std::uint64_t{0});
             constexpr std::array names{"left_hip_joint",   "left_knee_joint", "right_hip_joint",
                                        "right_knee_joint", "left_wheel",      "right_wheel"};
             for (std::size_t i = 0; i < names.size(); ++i) {
@@ -228,6 +232,8 @@ private:
             const std::lock_guard lock{status_mutex_};
             update_motor_status();
             gimbal_yaw_motor_.update_status();
+            *yaw_feedback_output_ =
+                static_cast<std::uint64_t>(yaw_feedback_ns_.load(std::memory_order_relaxed));
             log_lk_fault_transition(
                 status_.get_logger(), "/gimbal/yaw", gimbal_yaw_motor_.motor_state(),
                 gimbal_yaw_motor_.error_state(), gimbal_yaw_last_error_);
@@ -269,7 +275,8 @@ private:
             last_reset_ = *reset_count_;
             const std::array pairs{pair_feedback(0), pair_feedback(1)};
             const bool available = feedback_available();
-            const bool requested = *enable_request_ && dr16_fresh() && available && !both_down;
+            const bool requested = !status_.gimbal_only_ && *enable_request_ && dr16_fresh()
+                                && available && !both_down;
             requested_snapshot_.store(requested, std::memory_order_relaxed);
             // Same drive gate as the legs, minus leg feedback availability (own board, own CAN).
             const bool gimbal_requested = *enable_request_ && dr16_fresh() && !both_down;
@@ -293,17 +300,15 @@ private:
                 wheel_motors_[1].generate_command(
                     wheel_allowed ? wheel_motors_[1].control_torque() : 0.),
                 device::CanPacket8::PaddingQuarter{}, device::CanPacket8::PaddingQuarter{}};
-            wheels << feeder_motor_;
+            if (!status_.gimbal_only_)
+                wheels << feeder_motor_;
             builder.can_transmit(
                 Spec::kCans.kCan0, {.can_id = 0x200, .can_data = wheels.as_bytes()});
             auto supercap_package = device::CanPacket8{
-                device::CanPacket8::PaddingQuarter{},
-                device::CanPacket8::PaddingQuarter{},
-                device::CanPacket8::PaddingQuarter{},
-                supercap_.generate_command()};
+                device::CanPacket8::PaddingQuarter{}, device::CanPacket8::PaddingQuarter{},
+                device::CanPacket8::PaddingQuarter{}, supercap_.generate_command()};
             builder.can_transmit(
-                Spec::kCans.kCan0,
-                {.can_id = 0x1FE, .can_data = supercap_package.as_bytes()});
+                Spec::kCans.kCan0, {.can_id = 0x1FE, .can_data = supercap_package.as_bytes()});
             // Same sequence as the DM joints: clear -> run -> torque, zero torque while disabled.
             const auto gimbal_action = gimbal_yaw_scheduler_.next(
                 gimbal_requested, lk_feedback(gimbal_yaw_motor_, gimbal_yaw_error_ns_),
@@ -425,6 +430,7 @@ private:
         [[nodiscard]] bool gimbal_drive_requested() const {
             return gimbal_drive_requested_.load(std::memory_order::relaxed);
         }
+
     private:
         mutable std::mutex status_mutex_;
         static std::int64_t now_ns() {
@@ -474,10 +480,9 @@ private:
                 }
                 channel_silent_[i] = silent;
             }
-            const auto state = !motor_feedback_available()
-                                 ? FeedbackWarningState::kMissing
-                                 : !motor_feedback_fresh() ? FeedbackWarningState::kStale
-                                                            : FeedbackWarningState::kFresh;
+            const auto state = !motor_feedback_available() ? FeedbackWarningState::kMissing
+                             : !motor_feedback_fresh()     ? FeedbackWarningState::kStale
+                                                           : FeedbackWarningState::kFresh;
             if (state == feedback_warning_state_)
                 return;
             if (state == FeedbackWarningState::kMissing) {
@@ -578,8 +583,10 @@ private:
             else if (can == Spec::kCans.kCan3 && data.can_id == 0x141) {
                 if (gimbal_yaw_motor_.store_error_status(data.can_data))
                     gimbal_yaw_error_ns_.store(now_ns(), std::memory_order::relaxed);
-                else
+                else {
                     gimbal_yaw_motor_.store_status(data.can_data);
+                    yaw_feedback_ns_.store(now_ns(), std::memory_order_relaxed);
+                }
             }
         }
         void configure_motors(WheelLeg& status) {
@@ -635,7 +642,8 @@ private:
                     static_cast<int>(yaw_zero_point)));
             // Feeder M3508 drives through an external 27:1 reducer.
             feeder_motor_.configure(
-                device::DjiMotor::Config{device::DjiMotor::Type::kM3508, 3}.set_reduction_ratio(27.));
+                device::DjiMotor::Config{device::DjiMotor::Type::kM3508, 3}.set_reduction_ratio(
+                    27.));
             RCLCPP_INFO(
                 status_.get_logger(), "DM Master IDs [LH,RH,LK,RK]=[%u,%u,%u,%u]",
                 static_cast<unsigned>(feedback_ids[0]), static_cast<unsigned>(feedback_ids[1]),
@@ -751,12 +759,13 @@ private:
 
         WheelLeg& status_;
         OutputInterface<Eigen::Quaterniond> imu_quaternion_;
+        OutputInterface<std::uint64_t> yaw_feedback_output_;
+        std::atomic<std::int64_t> yaw_feedback_ns_{0};
         OutputInterface<Eigen::Vector3d> imu_angular_velocity_, imu_acceleration_;
         OutputInterface<std::uint64_t> acceleration_last_output_, imu_last_output_,
             imu_sequence_output_, acceleration_sequence_output_;
-        OutputInterface<bool>
-            feedback_fresh_output_, feedback_available_output_, dm_control_ready_output_,
-            dr16_fresh_output_;
+        OutputInterface<bool> feedback_fresh_output_, feedback_available_output_,
+            dm_control_ready_output_, dr16_fresh_output_;
         std::array<OutputInterface<std::uint64_t>, 6> feedback_ns_outputs_,
             feedback_sequence_outputs_;
         InputInterface<bool> enable_request_;
@@ -786,10 +795,10 @@ private:
             acceleration_feedback_;
         // Indexed like motor_last_ns_: wheels (CAN0), hips (CAN1), knees (CAN2).
         static constexpr std::array<const char*, 6> kChannelNames{
-            "left_wheel",     "right_wheel",    "left_hip_joint",
+            "left_wheel",      "right_wheel",     "left_hip_joint",
             "right_hip_joint", "left_knee_joint", "right_knee_joint"};
-        static constexpr std::array<const char*, 6> kChannelBuses{
-            "CAN0", "CAN0", "CAN1", "CAN1", "CAN2", "CAN2"};
+        static constexpr std::array<const char*, 6> kChannelBuses{"CAN0", "CAN0", "CAN1",
+                                                                  "CAN1", "CAN2", "CAN2"};
         static constexpr std::int64_t kChannelSilentNs = 100'000'000;
         std::array<bool, 6> channel_silent_{};
         std::array<std::int64_t, 6> channel_silent_since_{};
@@ -819,30 +828,34 @@ private:
             , left_friction_(status, command, "/gimbal/left_friction")
             , right_friction_(status, command, "/gimbal/right_friction")
             // Gimbal BMI088: mounted rotated 180 degrees about body Z.
-            , bmi088_(device::Bmi088Ekf::Config{
-                  .body_to_sensor =
-                      Eigen::AngleAxisd{std::numbers::pi, Eigen::Vector3d::UnitZ()}
-                          .toRotationMatrix(),
-              }) {
+            , bmi088_(
+                  device::Bmi088Ekf::Config{
+                      .body_to_sensor =
+                          Eigen::AngleAxisd{std::numbers::pi, Eigen::Vector3d::UnitZ()}
+                              .toRotationMatrix(),
+                  }) {
             status.register_output("/gimbal/yaw/velocity_imu", yaw_velocity_, 0.0);
             status.register_output("/gimbal/pitch/velocity_imu", pitch_velocity_, 0.0);
+            status.register_output(
+                "/gimbal/pitch/feedback_steady_ns", pitch_feedback_output_, std::uint64_t{0});
+            status.register_output("/gimbal/imu/last_steady_ns", imu_stamp_, std::uint64_t{0});
             const auto pitch_zero_point =
                 status.get_parameter_or<std::int64_t>("pitch_motor_zero_point", 0);
             pitch_motor_.configure(
                 device::LkMotor::Config{device::LkMotor::Type::kMG4010Ei10}.set_encoder_zero_point(
                     static_cast<int>(pitch_zero_point)));
             left_friction_.configure(
-                device::DjiMotor::Config{device::DjiMotor::Type::kM3508, 2}.set_reduction_ratio(1.));
+                device::DjiMotor::Config{device::DjiMotor::Type::kM3508, 2}.set_reduction_ratio(
+                    1.));
             right_friction_.configure(
-                device::DjiMotor::Config{device::DjiMotor::Type::kM3508, 1}.set_reduction_ratio(1.));
+                device::DjiMotor::Config{device::DjiMotor::Type::kM3508, 1}.set_reduction_ratio(
+                    1.));
             auto options = librmcs::board::AdvancedOptions{};
             options.dangerously_skip_version_checks = true;
             board_ = std::make_unique<librmcs::board::RmcsBoardLite>(*this, serial, options);
         }
 
-        [[nodiscard]] std::int64_t pitch_raw_angle() const {
-            return pitch_motor_.last_raw_angle();
-        }
+        [[nodiscard]] std::int64_t pitch_raw_angle() const { return pitch_motor_.last_raw_angle(); }
         [[nodiscard]] std::string status_text() const {
             return std::format(
                 "    gimbal_pitch: can_id=0x142 motor_state=0x{:02X} error=0x{:02X}({}) "
@@ -856,6 +869,8 @@ private:
 
         void update() {
             pitch_motor_.update_status();
+            *pitch_feedback_output_ =
+                static_cast<std::uint64_t>(pitch_feedback_ns_.load(std::memory_order_relaxed));
             log_lk_fault_transition(
                 status_.get_logger(), "/gimbal/pitch", pitch_motor_.motor_state(),
                 pitch_motor_.error_state(), pitch_last_error_);
@@ -864,25 +879,26 @@ private:
             right_friction_.update_status();
 
             const double pitch_angle = pitch_motor_.angle();
+            *imu_stamp_ =
+                static_cast<std::uint64_t>(imu_received_ns_.load(std::memory_order_relaxed));
             if (auto snapshot = bmi088_.snapshot()) {
                 *yaw_velocity_ = snapshot->gyro_body.z();
                 *pitch_velocity_ = snapshot->gyro_body.y();
-                status_.tf_->set_transform<
-                    rmcs_description::PitchLink, rmcs_description::OdomImu>(
+                status_.tf_->set_transform<rmcs_description::PitchLink, rmcs_description::OdomImu>(
                     snapshot->orientation.conjugate());
             }
             status_.tf_->set_state<rmcs_description::YawLink, rmcs_description::PitchLink>(
                 pitch_angle);
             if (status_.bottom_board_)
-                status_.tf_->set_state<
-                    rmcs_description::GimbalCenterLink, rmcs_description::YawLink>(
-                    status_.bottom_board_->yaw_angle());
+                status_.tf_
+                    ->set_state<rmcs_description::GimbalCenterLink, rmcs_description::YawLink>(
+                        status_.bottom_board_->yaw_angle());
         }
 
         void command_update() {
             // Gate comes from the bottom board, which already folds in the both-down check.
-            const bool requested = status_.bottom_board_
-                                && status_.bottom_board_->gimbal_drive_requested();
+            const bool requested =
+                status_.bottom_board_ && status_.bottom_board_->gimbal_drive_requested();
             auto builder = board_->start_transmit();
             const auto pitch_action = pitch_scheduler_.next(
                 requested, lk_feedback(pitch_motor_, pitch_error_ns_), LkDriveClock::now());
@@ -891,7 +907,8 @@ private:
                     Spec::kCans.kCan0, {.can_id = 0x142, .can_data = packet->as_bytes()});
             // Left friction is ID 2 and right is ID 1; both share 0x200.
             auto friction = device::CanPacket8{std::uint64_t{0}};
-            friction << right_friction_ << left_friction_;
+            if (!status_.gimbal_only_)
+                friction << right_friction_ << left_friction_;
             builder.can_transmit(
                 Spec::kCans.kCan1, {.can_id = 0x200, .can_data = friction.as_bytes()});
         }
@@ -903,8 +920,10 @@ private:
                 if (data.can_id == 0x142) {
                     if (pitch_motor_.store_error_status(data.can_data))
                         pitch_error_ns_.store(now_ns(), std::memory_order::relaxed);
-                    else
+                    else {
                         pitch_motor_.store_status(data.can_data);
+                        pitch_feedback_ns_.store(now_ns(), std::memory_order_relaxed);
+                    }
                 }
             } else if (can == Spec::kCans.kCan1) {
                 if (!left_friction_.match_then_store_status(data.can_id, data.can_data))
@@ -922,6 +941,7 @@ private:
             if (!timestamp.has_value())
                 return;
             bmi088_.try_update_with_gyroscope_sample(data.x, data.y, data.z, *timestamp);
+            imu_received_ns_.store(now_ns(), std::memory_order_relaxed);
         }
 
         static std::int64_t now_ns() {
@@ -932,6 +952,10 @@ private:
 
         WheelLeg& status_;
         OutputInterface<double> yaw_velocity_, pitch_velocity_;
+        OutputInterface<std::uint64_t> pitch_feedback_output_;
+        std::atomic<std::int64_t> pitch_feedback_ns_{0};
+        OutputInterface<std::uint64_t> imu_stamp_;
+        std::atomic<std::int64_t> imu_received_ns_{0};
         device::LkMotor pitch_motor_;
         device::LkMotorDriveScheduler pitch_scheduler_;
         std::atomic<device::LkMotorDriveScheduler::Phase> pitch_phase_{

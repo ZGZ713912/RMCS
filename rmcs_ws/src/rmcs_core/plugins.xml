@@ -1,4 +1,8 @@
 <library path="rmcs_core">
+  <class type="rmcs_core::controller::identification::WheelLegFrequencySweepController" base_class_type="rmcs_executor::Component" />
+  <class type="rmcs_core::controller::identification::GimbalFrequencySweepController" base_class_type="rmcs_executor::Component" />
+  <class type="rmcs_core::controller::identification::GimbalTorqueSweepController" base_class_type="rmcs_executor::Component" />
+  <class type="rmcs_core::controller::gimbal::PitchGravityFeedforward" base_class_type="rmcs_executor::Component" />
   <class type="rmcs_core::controller::chassis::WheelLegObservation" base_class_type="rmcs_executor::Component" />
   <class type="rmcs_core::controller::chassis::WheelLegStateEstimator" base_class_type="rmcs_executor::Component" />
   <class type="rmcs_core::controller::chassis::WheelLegRlController" base_class_type="rmcs_executor::Component" />

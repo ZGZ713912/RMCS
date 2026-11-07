@@ -1,0 +1,181 @@
+# 双板实车 hardware，来源 dev/wheel-leg-refactor；只给 yaw/pitch 下发闭环力矩。
+# 腿始终请求失能，轮、摩擦轮、拨弹零力矩；不包含底盘/腿/射击控制器。
+# 腿和轮不会主动保持姿态，测试时机体应由外部支撑固定。
+# DR16 [左,右]：中/中=手动（左摇杆 yaw/pitch，和正常云台一致）；上/中=yaw；
+# 中/上=pitch；上/上=先 yaw 后 pitch。双下、掉线、UNKNOWN 或其它组合=停止/清空状态。
+# 扫完保持中心，不自动重跑。
+# 反馈故障停止后，切换档位或双下再重新选择；每次选择捕获当前位置为中心。
+# 无位置软限位或中间 PID 限幅，仅最终总力矩 ±4.5 Nm；避免机械/线缆干涉。
+# 启动：ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-gimbal-sweep
+rmcs_executor:
+  ros__parameters:
+    update_rate: 1000.0
+    components:
+      - rmcs_core::hardware::WheelLeg -> wheel_leg
+      - rmcs_core::controller::identification::GimbalFrequencySweepController -> gimbal_sweep
+      - rmcs_core::controller::gimbal::PitchGravityFeedforward -> pitch_gravity_ff
+      - rmcs_core::controller::pid::ErrorPidController -> yaw_angle_pid_controller
+      - rmcs_core::controller::pid::PidController -> yaw_velocity_pid_controller
+      - rmcs_core::controller::pid::ErrorPidController -> pitch_angle_pid_controller
+      - rmcs_core::controller::pid::PidController -> pitch_velocity_pid_controller
+      - rmcs_core::debug::ValueCollector -> value_collector
+      - rmcs_core::broadcaster::ValueBroadcaster -> value_broadcaster
+
+wheel_leg:
+  ros__parameters:
+    serial_filter_bottom_board: "AF-CBB3-7053-32C5-F3B5-B460-A786-DA9A-1FF1"
+    serial_filter_top_board: "AF-46C7-7B12-9364-64F6-D95A-E4F4-9299-1B75"
+    yaw_motor_zero_point: 58379
+    pitch_motor_zero_point: 12637
+    # 硬件发送层再次禁止腿/轮/射击输出，与上层 enable_request 无关。
+    gimbal_only: true
+    dm_master_ids: [1, 2, 1, 2]
+    dm_mit_position_max: [12.5, 12.5, 12.5, 12.5]
+    dm_mit_velocity_max: [45.0, 45.0, 45.0, 45.0]
+    dm_mit_torque_max: [54.0, 54.0, 54.0, 54.0]
+    dm_control_torque_max: [40.0, 40.0, 40.0, 40.0]
+    feedback_timeout_s: 0.04
+
+gimbal_sweep:
+  ros__parameters:
+    # 固定机体下，编码器位置外环 + 云台 IMU 角速度内环；弧度/rad/s/Nm。
+    # 对数 chirp，首尾 raised-cosine 渐入渐出；非扫频轴维持捕获位置。
+    frequency_start_hz: 0.2
+    frequency_end_hz: 1.0 # 双环首轮低频验证；稳定后再逐步扩频
+    duration_s: 60.0
+    settle_s: 5.0
+    ramp_s: 2.0
+    yaw_amplitude_rad: 0.05235987755982989 # 3 deg，单边幅度
+    pitch_amplitude_rad: 0.03490658503988659 # 2 deg，单边幅度
+    # 只要求云台 yaw/pitch CAN、云台 IMU 和遥控新鲜；不依赖腿/轮反馈。
+    feedback_timeout_s: 0.1
+    # 中/中 手动模式：左摇杆 y 推 yaw、x 推 pitch（向上为正，与 SimpleGimbalController 一致），
+    # 杆量线性映射成参考角速度，进入该档时以当前角度为起点。
+    # 与正常云台一致的手动参考速度；实际跟随仍由双环控制。
+    manual_yaw_rate_rad_s: 6.0
+    manual_pitch_rate_rad_s: 6.0
+    manual_deadzone: 0.02
+
+# 以下为 1000 Hz 离散 PID：I 每拍累加、D 为相邻误差差，不再额外乘/除 dt。
+# yaw 参考开环辨识降低速度环增益；pitch 为带已调重力补偿的待验证粗调起点。
+# 四个环均采用纯 P，不设置积分限幅；待闭环扫频数据验证后再精调。
+# 无中间输出限幅，速度 PID + 前馈之后仅作最终总力矩 ±4.5 Nm 限幅。
+# 修改 PID 增益后重新启动该配置生效。
+yaw_angle_pid_controller:
+  ros__parameters:
+    measurement: /gimbal/yaw/control_angle_error
+    control: /gimbal/yaw/control_velocity
+    reset_interface: /chassis/reset_count
+    kp: 5.0
+    ki: 0.0
+    kd: 0.0
+
+yaw_velocity_pid_controller:
+  ros__parameters:
+    measurement: /gimbal/yaw/velocity_imu
+    setpoint: /gimbal/yaw/control_velocity
+    control: /gimbal/yaw/control_torque
+    reset_interface: /chassis/reset_count
+    kp: 1.5
+    ki: 0.0
+    kd: 0.0
+    total_output_min: -4.5
+    total_output_max: 4.5
+
+pitch_angle_pid_controller:
+  ros__parameters:
+    measurement: /gimbal/pitch/control_angle_error
+    control: /gimbal/pitch/control_velocity
+    reset_interface: /chassis/reset_count
+    kp: 6.0
+    ki: 0.0
+    kd: 0.0
+
+pitch_velocity_pid_controller:
+  ros__parameters:
+    measurement: /gimbal/pitch/velocity_imu
+    setpoint: /gimbal/pitch/control_velocity
+    control: /gimbal/pitch/control_torque
+    feedforward: /gimbal/pitch/torque_ff
+    reset_interface: /chassis/reset_count
+    kp: 1.5
+    ki: 0.0
+    kd: 0.0
+    total_output_min: -4.5
+    total_output_max: 4.5
+
+# deformable 同款两参数模型：tau_ff = gain * sin(world_pitch - phase)，世界 pitch 取自 top 板 IMU 的 TF。
+pitch_gravity_ff:
+  ros__parameters:
+    pitch_gravity_ff_gain: 0.9 # 沿用实车手调结果
+    pitch_gravity_ff_phase: 0.75 # rad，沿用实车手调结果
+
+value_collector:
+  ros__parameters:
+    csv_path: "/tmp/wheel_leg_gimbal_sweep_<timestamp>.csv"
+    write_interval: 1 # 1000 Hz
+    flush_interval: 1000
+    strict_signals: true
+    # state: 0=停止 1=保持/等待 2=扫频 3=完成保持 4=反馈故障 5=角度范围故障。
+    # mode: 0=停止 1=保持 2=yaw 3=pitch 4=依次；axis: 0=无 1=yaw 2=pitch。
+    # /torque 是驱动电流估计；control_torque 是软件指令，不是独立力矩传感器。
+    signals:
+      - /gimbal/sweep/steady_ns
+      - /gimbal/sweep/state
+      - /gimbal/sweep/mode
+      - /gimbal/sweep/axis
+      - /gimbal/sweep/enabled
+      - /gimbal/sweep/completed
+      - /gimbal/sweep/elapsed_s
+      - /gimbal/sweep/frequency_hz
+      - /gimbal/yaw/sweep/reference
+      - /gimbal/yaw/sweep/reference_velocity
+      - /gimbal/yaw/angle
+      - /gimbal/yaw/velocity
+      - /gimbal/yaw/velocity_imu
+      - /gimbal/yaw/control_angle_error
+      - /gimbal/yaw/control_velocity
+      - /gimbal/yaw/control_torque
+      - /gimbal/yaw/torque
+      - /gimbal/yaw/temperature
+      - /gimbal/yaw/feedback_steady_ns
+      - /gimbal/pitch/sweep/reference
+      - /gimbal/pitch/sweep/reference_velocity
+      - /gimbal/pitch/angle
+      - /gimbal/pitch/velocity
+      - /gimbal/pitch/velocity_imu
+      - /gimbal/pitch/torque_ff
+      - /gimbal/pitch/control_angle_error
+      - /gimbal/pitch/control_velocity
+      - /gimbal/pitch/control_torque
+      - /gimbal/pitch/torque
+      - /gimbal/pitch/temperature
+      - /gimbal/pitch/feedback_steady_ns
+      - /gimbal/imu/last_steady_ns
+      - /wheel_leg/dr16_fresh
+      - /wheel_leg/enable_request
+      - /wheel_leg/dm_control_ready
+      - /chassis/reset_count
+      - /wheel_leg/left_hip_joint/control_torque
+      - /wheel_leg/left_knee_joint/control_torque
+      - /wheel_leg/right_hip_joint/control_torque
+      - /wheel_leg/right_knee_joint/control_torque
+      - /wheel_leg/left_wheel/control_torque
+      - /wheel_leg/right_wheel/control_torque
+      - /gimbal/left_friction/control_torque
+      - /gimbal/right_friction/control_torque
+      - /gimbal/bullet_feeder/control_torque
+
+value_broadcaster:
+  ros__parameters:
+    forward_list:
+      - /gimbal/yaw/control_torque
+      - /gimbal/yaw/angle
+      - /gimbal/yaw/velocity
+      - /gimbal/yaw/control_angle_error
+      - /gimbal/yaw/control_velocity
+      - /gimbal/pitch/control_torque
+      - /gimbal/pitch/angle
+      - /gimbal/pitch/velocity
+      - /gimbal/pitch/control_angle_error
+      - /gimbal/pitch/control_velocity
