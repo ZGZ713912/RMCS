@@ -242,6 +242,12 @@ public:
         return encoder_zero_point_;
     }
 
+    double command_frame_torque(CanPacket8::Quarter packet) const {
+        const auto current = std::bit_cast<rmcs_utility::be_int16_t>(packet);
+        return static_cast<double>(static_cast<int16_t>(current))
+             * raw_current_to_torque_coefficient_;
+    }
+
     int last_raw_angle() const { return last_raw_angle_; }
 
     double angle() const { return angle_; }

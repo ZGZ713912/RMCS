@@ -205,6 +205,13 @@ private:
                     prefix + "/feedback_steady_ns", feedback_ns_outputs_[i], std::uint64_t{0});
                 status.register_output(
                     prefix + "/feedback_sequence", feedback_sequence_outputs_[i], std::uint64_t{0});
+                command.register_output(
+                    prefix + "/tau_frame_api", tx_torque_[i],
+                    std::numeric_limits<double>::quiet_NaN());
+                command.register_output(prefix + "/tx_kind", tx_kind_[i], 0);
+                command.register_output(
+                    prefix + "/tx_queued_steady_ns", tx_ns_[i], std::uint64_t{0});
+                command.register_output(prefix + "/tx_sequence", tx_sequence_[i], std::uint64_t{0});
             }
             command.register_input("/wheel_leg/enable_request", enable_request_);
             command.register_input("/chassis/reset_count", reset_count_);
@@ -266,6 +273,10 @@ private:
             *dr16_fresh_output_ = dr16_fresh();
         }
         void command_update() {
+            for (std::size_t i = 0; i < 6; ++i) {
+                *tx_kind_[i] = 0;
+                *tx_torque_[i] = std::numeric_limits<double>::quiet_NaN();
+            }
             const bool both_down = dr16_fresh() && dr16_.switch_left() == rmcs_msgs::Switch::DOWN
                                 && dr16_.switch_right() == rmcs_msgs::Switch::DOWN;
             const bool down_edge = both_down && !previous_both_down_;
@@ -294,16 +305,24 @@ private:
             // M3508 IDs 1/2 are the wheels and ID 3 is the feeder, all behind the
             // single 0x200 frame on CAN0. This board stays the only 0x200 writer:
             // a second producer would overwrite the other slots every cycle.
-            auto wheels = device::CanPacket8{
+            const std::array wheel_packets{
                 wheel_motors_[0].generate_command(
                     wheel_allowed ? wheel_motors_[0].control_torque() : 0.),
                 wheel_motors_[1].generate_command(
-                    wheel_allowed ? wheel_motors_[1].control_torque() : 0.),
-                device::CanPacket8::PaddingQuarter{}, device::CanPacket8::PaddingQuarter{}};
+                    wheel_allowed ? wheel_motors_[1].control_torque() : 0.)};
+            auto wheels = device::CanPacket8{
+                wheel_packets[0], wheel_packets[1], device::CanPacket8::PaddingQuarter{},
+                device::CanPacket8::PaddingQuarter{}};
             if (!status_.gimbal_only_)
                 wheels << feeder_motor_;
             builder.can_transmit(
                 Spec::kCans.kCan0, {.can_id = 0x200, .can_data = wheels.as_bytes()});
+            for (std::size_t i = 0; i < 2; ++i) {
+                *tx_torque_[4 + i] = wheel_motors_[i].command_frame_torque(wheel_packets[i]);
+                *tx_kind_[4 + i] = 1;
+                *tx_ns_[4 + i] = static_cast<std::uint64_t>(now_ns());
+                ++*tx_sequence_[4 + i];
+            }
             auto supercap_package = device::CanPacket8{
                 device::CanPacket8::PaddingQuarter{}, device::CanPacket8::PaddingQuarter{},
                 device::CanPacket8::PaddingQuarter{}, supercap_.generate_command()};
@@ -324,6 +343,17 @@ private:
                     builder.can_transmit(
                         axis % 2 == 0 ? Spec::kCans.kCan1 : Spec::kCans.kCan2,
                         {.can_id = motor.send_id(), .can_data = packet.as_bytes()});
+                    const bool torque_frame = action != Action::kClearError
+                                           && action != Action::kEnable
+                                           && action != Action::kDisable;
+                    *tx_kind_[axis] = torque_frame               ? 1
+                                    : action == Action::kEnable  ? 2
+                                    : action == Action::kDisable ? 3
+                                                                 : 4;
+                    *tx_torque_[axis] = torque_frame ? motor.command_frame_torque(packet)
+                                                     : std::numeric_limits<double>::quiet_NaN();
+                    *tx_ns_[axis] = static_cast<std::uint64_t>(now_ns());
+                    ++*tx_sequence_[axis];
                 });
             for (int side = 0; side < 2; ++side) {
                 if (requested && available && actions[side] == Action::kMit)
@@ -766,6 +796,9 @@ private:
             imu_sequence_output_, acceleration_sequence_output_;
         OutputInterface<bool> feedback_fresh_output_, feedback_available_output_,
             dm_control_ready_output_, dr16_fresh_output_;
+        std::array<OutputInterface<double>, 6> tx_torque_;
+        std::array<OutputInterface<int>, 6> tx_kind_;
+        std::array<OutputInterface<std::uint64_t>, 6> tx_ns_, tx_sequence_;
         std::array<OutputInterface<std::uint64_t>, 6> feedback_ns_outputs_,
             feedback_sequence_outputs_;
         InputInterface<bool> enable_request_;

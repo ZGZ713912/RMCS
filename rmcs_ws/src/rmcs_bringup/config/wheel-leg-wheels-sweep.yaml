@@ -77,6 +77,17 @@ value_collector:
     # tx_queued_steady_ns is host submission time, NOT drive execution time.
     # Torque feedback is the drive current-based estimate, not a torque sensor.
     signals:
+      - /predefined/update_count
+      - /wheel_leg/left_wheel/tau_frame_api
+      - /wheel_leg/left_wheel/tx_kind
+      - /wheel_leg/left_wheel/tx_queued_steady_ns
+      - /wheel_leg/left_wheel/tx_sequence
+      - /wheel_leg/right_wheel/tau_frame_api
+      - /wheel_leg/right_wheel/tx_kind
+      - /wheel_leg/right_wheel/tx_queued_steady_ns
+      - /wheel_leg/right_wheel/tx_sequence
+      - /wheel_leg/left_wheel/temperature_c
+      - /wheel_leg/right_wheel/temperature_c
       - /wheel_leg/sweep/experiment
       - /wheel_leg/sweep/side
       - /wheel_leg/sweep/state

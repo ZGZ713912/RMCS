@@ -3,7 +3,10 @@
 #include <numbers>
 
 #include <gtest/gtest.h>
+#include <pluginlib/class_loader.hpp>
+#include <rclcpp/rclcpp.hpp>
 
+#include "hardware/device/dji_motor.hpp"
 #include "hardware/device/dm_motor.hpp"
 #include "hardware/util/wheel_leg_drive.hpp"
 #include "identification/wheel_leg_limit_probe.hpp"
@@ -442,6 +445,46 @@ class PacketFixture final : public rmcs_executor::Component {
 public:
     void update() override {}
 };
+
+TEST(FrequencySweepHardware, DjiEncodedTorquePreservesSignAndClips) {
+    using Motor = rmcs_core::hardware::device::DjiMotor;
+    rmcs_executor::Component::initializing_component_name = "dji_packet_fixture";
+    PacketFixture fixture;
+    Motor motor{fixture, fixture, "/test_wheel", Motor::Config{Motor::Type::kM3508, 1}};
+    for (double torque : {-100., -1., 0., 1., 100.}) {
+        const double decoded = motor.command_frame_torque(motor.generate_command(torque));
+        EXPECT_NEAR(
+            decoded, std::clamp(torque, -motor.max_torque(), motor.max_torque()),
+            motor.max_torque() / 16384 + 1e-9);
+    }
+}
+
+TEST(FrequencySweepCsv, StrictModeRejectsMissingAndUnsupportedSignals) {
+    rclcpp::init(0, nullptr);
+    {
+        pluginlib::ClassLoader<rmcs_executor::Component> loader{
+            "rmcs_executor", "rmcs_executor::Component"};
+        const auto check = [&](bool strict, const rmcs_executor::Component::OutputInfoMap& map) {
+            rmcs_executor::Component::initializing_component_name = "csv_strict_test";
+            auto component = loader.createSharedInstance("rmcs_core::debug::ValueCollector");
+            auto node = std::dynamic_pointer_cast<rclcpp::Node>(component);
+            node->declare_parameter("csv_path", "/tmp/csv_strict_test.csv");
+            node->declare_parameter("signals", std::vector<std::string>{"/missing"});
+            node->declare_parameter("write_interval", 1);
+            node->declare_parameter("flush_interval", 1);
+            node->declare_parameter("strict_signals", strict);
+            if (strict)
+                EXPECT_THROW(component->before_pairing(map), std::runtime_error);
+            else
+                EXPECT_NO_THROW(component->before_pairing(map));
+        };
+        check(true, {});
+        check(false, {});
+        check(true, {{"/missing", {typeid(std::string), rmcs_executor::InterfaceKind::Normal}}});
+        check(true, {{"/missing", {typeid(double), rmcs_executor::InterfaceKind::Event}}});
+    }
+    rclcpp::shutdown();
+}
 
 TEST(FrequencySweepHardware, EnabledSessionKeepsFcAndZeroGainMitWithoutFd) {
     using namespace rmcs_core::hardware;

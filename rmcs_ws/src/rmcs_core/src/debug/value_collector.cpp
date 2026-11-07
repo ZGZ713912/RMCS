@@ -12,7 +12,9 @@
 #include <functional>
 #include <iomanip>
 #include <memory>
+#include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <typeinfo>
@@ -50,29 +52,46 @@ public:
         node::param("signals", signal_names_);
         node::param("write_interval", write_interval_);
         node::param("flush_interval", flush_interval_);
+        strict_signals_ = get_parameter_or("strict_signals", false);
+        const bool strict = strict_signals_;
 
-        if (csv_path_.empty() || signal_names_.empty())
+        if (csv_path_.empty() || signal_names_.empty()) {
+            if (strict)
+                throw std::runtime_error("Strict CSV requires a path and signals");
             return;
+        }
         if (write_interval_ < 1 || flush_interval_ < 1) {
             node::error(
                 "write_interval ({}) and flush_interval ({}) must be positive", write_interval_,
                 flush_interval_);
+            if (strict)
+                throw std::runtime_error("Invalid strict CSV sampling intervals");
             return;
         }
 
+        std::set<std::string> seen;
         for (const auto& name : signal_names_) {
+            if (strict && !seen.insert(name).second)
+                throw std::runtime_error("Duplicate strict CSV signal: " + name);
             const auto it = output_map.find(name);
             if (it == output_map.end()) {
+                if (strict)
+                    throw std::runtime_error("CSV signal not found: " + name);
                 node::error("signal '{}' not found", name);
                 continue;
             }
             if (it->second.kind != rmcs_executor::InterfaceKind::Normal) {
+                if (strict)
+                    throw std::runtime_error("CSV signal is not a normal interface: " + name);
                 node::error("signal '{}' is an event interface", name);
                 continue;
             }
-            if (!register_signal(name, it->second.type.get()))
+            if (!register_signal(name, it->second.type.get())) {
+                if (strict)
+                    throw std::runtime_error("Unsupported CSV signal type: " + name);
                 node::error(
                     "signal '{}' has an unsupported type ({})", name, it->second.type.get().name());
+            }
         }
 
         if (units_.empty())
@@ -103,6 +122,8 @@ public:
 
         csv_file_.open(csv_path_, std::ios::out | std::ios::trunc);
         if (!csv_file_.is_open()) {
+            if (strict_signals_)
+                throw std::runtime_error("Cannot open strict CSV: " + csv_path_);
             node::error("failed to open {}", csv_path_);
             return;
         }
@@ -134,6 +155,8 @@ public:
 
         if (sample_count_ % flush_interval_ == 0)
             csv_file_.flush();
+        if (!csv_file_ && strict_signals_)
+            throw std::runtime_error("Strict CSV write failed: " + csv_path_);
     }
 
 private:
@@ -209,30 +232,25 @@ private:
     }
 
     auto register_signal(const std::string& name, const std::type_info& type) -> bool {
-        if (register_typed<double>(name, type, {name}, [](std::ostream& os, double value) {
-                os << "," << value;
-            }))
+        if (register_typed<double>(
+                name, type, {name}, [](std::ostream& os, double value) { os << "," << value; }))
             return true;
-        if (register_typed<int>(name, type, {name}, [](std::ostream& os, int value) {
-                os << "," << value;
-            }))
+        if (register_typed<int>(
+                name, type, {name}, [](std::ostream& os, int value) { os << "," << value; }))
             return true;
         if (register_typed<std::uint8_t>(name, type, {name}, [](std::ostream& os, std::uint8_t v) {
                 os << "," << static_cast<unsigned>(v);
             }))
             return true;
-        if (register_typed<std::uint32_t>(name, type, {name}, [](std::ostream& os, std::uint32_t v) {
-                os << "," << v;
-            }))
+        if (register_typed<std::uint32_t>(
+                name, type, {name}, [](std::ostream& os, std::uint32_t v) { os << "," << v; }))
             return true;
-        if (register_typed<std::uint64_t>(name, type, {name}, [](std::ostream& os, std::uint64_t v) {
-                os << "," << v;
-            }))
+        if (register_typed<std::uint64_t>(
+                name, type, {name}, [](std::ostream& os, std::uint64_t v) { os << "," << v; }))
             return true;
         if constexpr (!std::is_same_v<std::size_t, std::uint64_t>) {
-            if (register_typed<std::size_t>(name, type, {name}, [](std::ostream& os, std::size_t v) {
-                    os << "," << v;
-                }))
+            if (register_typed<std::size_t>(
+                    name, type, {name}, [](std::ostream& os, std::size_t v) { os << "," << v; }))
                 return true;
         }
         if (register_typed<bool>(name, type, {name}, [](std::ostream& os, bool value) {
@@ -273,6 +291,7 @@ private:
     std::vector<std::string> signal_names_;
     int write_interval_ = 1;
     int flush_interval_ = 100;
+    bool strict_signals_ = false;
 
     std::vector<SignalUnit> units_;
     // Keeps every registered input alive; SignalUnit lambdas point into these.

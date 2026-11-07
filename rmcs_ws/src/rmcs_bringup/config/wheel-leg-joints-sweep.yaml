@@ -82,6 +82,31 @@ value_collector:
     # tx_queued_steady_ns is host submission time, NOT drive execution time.
     # Torque feedback is the drive current-based estimate, not a torque sensor.
     signals:
+      - /predefined/update_count
+      - /wheel_leg/left_hip_joint/tau_frame_api
+      - /wheel_leg/left_hip_joint/tx_kind
+      - /wheel_leg/left_hip_joint/tx_queued_steady_ns
+      - /wheel_leg/left_hip_joint/tx_sequence
+      - /wheel_leg/left_knee_joint/tau_frame_api
+      - /wheel_leg/left_knee_joint/tx_kind
+      - /wheel_leg/left_knee_joint/tx_queued_steady_ns
+      - /wheel_leg/left_knee_joint/tx_sequence
+      - /wheel_leg/right_hip_joint/tau_frame_api
+      - /wheel_leg/right_hip_joint/tx_kind
+      - /wheel_leg/right_hip_joint/tx_queued_steady_ns
+      - /wheel_leg/right_hip_joint/tx_sequence
+      - /wheel_leg/right_knee_joint/tau_frame_api
+      - /wheel_leg/right_knee_joint/tx_kind
+      - /wheel_leg/right_knee_joint/tx_queued_steady_ns
+      - /wheel_leg/right_knee_joint/tx_sequence
+      - /wheel_leg/left_hip_joint/temperature_mos
+      - /wheel_leg/left_hip_joint/temperature_rotor
+      - /wheel_leg/left_knee_joint/temperature_mos
+      - /wheel_leg/left_knee_joint/temperature_rotor
+      - /wheel_leg/right_hip_joint/temperature_mos
+      - /wheel_leg/right_hip_joint/temperature_rotor
+      - /wheel_leg/right_knee_joint/temperature_mos
+      - /wheel_leg/right_knee_joint/temperature_rotor
       - /wheel_leg/sweep/actual_beta_min
       - /wheel_leg/sweep/actual_beta_max
       - /wheel_leg/sweep/actual_beta_reached_40
