@@ -32,9 +32,11 @@ enum class SweepStop : int {
 // Level-triggered remote handling with optional completion hold for wheel real2sim.
 class WheelLegSweepSession {
 public:
-    explicit WheelLegSweepSession(bool joints, bool hold_completion = false)
+    explicit WheelLegSweepSession(
+        bool joints, bool hold_completion = false, int fixed_joint_mode = 0)
         : joints_(joints)
-        , hold_completion_(hold_completion) {}
+        , hold_completion_(hold_completion)
+        , fixed_joint_mode_(fixed_joint_mode) {}
 
     bool update(
         double now, bool remote_fresh, rmcs_msgs::Switch left, rmcs_msgs::Switch right,
@@ -53,8 +55,15 @@ public:
             return false;
         }
         const bool middle_now = left == Switch::MIDDLE && right == Switch::MIDDLE;
-        if (middle_now)
+        if (middle_now && !fixed_joint_mode_)
             completion_latched_ = false;
+        if (fixed_joint_mode_ && !middle_now) {
+            state = SweepState::kStandby;
+            reason = SweepStop::kOperator;
+            mode = 0;
+            completed = false;
+            return false;
+        }
         if (health != SweepStop::kNone) {
             fault(health);
             return false;
@@ -65,7 +74,8 @@ public:
             completed = true;
             return false;
         }
-        const int selected = joints_ ? (left == Switch::UP && right == Switch::MIDDLE   ? 1
+        const int selected = fixed_joint_mode_ ? fixed_joint_mode_
+                           : joints_ ? (left == Switch::UP && right == Switch::MIDDLE   ? 1
                                         : left == Switch::MIDDLE && right == Switch::UP ? 2
                                         : left == Switch::UP && right == Switch::UP     ? 3
                                                                                         : 0)
@@ -115,6 +125,7 @@ public:
 private:
     bool joints_;
     bool hold_completion_ = false, completion_latched_ = false;
+    int fixed_joint_mode_ = 0;
 };
 
 } // namespace rmcs_core::controller::identification

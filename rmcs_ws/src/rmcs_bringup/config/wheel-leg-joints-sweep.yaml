@@ -1,9 +1,6 @@
 # Standalone identification. See docs/zh-cn/wheel_leg_frequency_sweep.md.
-# Level-triggered remote: DOWN/DOWN off; MIDDLE/MIDDLE zero effort.
-# No reset/arming order, debounce, acknowledgement timeout, or fault/completion latch.
-# joints: UP/MIDDLE=1, MIDDLE/UP=2, UP/UP=3; other valid modes are standby.
-# wheels/limits: every valid non-DOWN/DOWN, non-MIDDLE/MIDDLE combination starts.
-# Held matching mode repeats after completion; mode changes take effect immediately.
+# Joint project is selected by YAML; MIDDLE/MIDDLE starts, DOWN/DOWN disables/resets.
+# Other switches stop effort; completion requires DOWN/DOWN before restarting.
 # Angles/speed/tracking/braking are diagnostics ONLY. No envelope exits or auto scaling.
 # Only active motor feedback is needed for control; IMU/parked motors are diagnostic.
 rmcs_executor:
@@ -31,6 +28,7 @@ wheel_leg:
 frequency_sweep:
   ros__parameters:
     experiment: "joints"
+    joint_mode: 2
     side: "left"
     # Follow current switches every tick; transient modes never latch the final mode.
     reference_frequency_hz: 200.0

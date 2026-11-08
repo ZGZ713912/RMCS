@@ -34,9 +34,17 @@ public:
         , geometry_{load_geometry("left"), load_geometry("right")}
         , session_(
               get_parameter("experiment").as_string() == "joints",
-              get_parameter("experiment").as_string() == "wheels"
-                  && get_parameter_or("wheel_real2sim", false)) {
+              get_parameter("experiment").as_string() == "joints"
+                  || (get_parameter("experiment").as_string() == "wheels"
+                      && get_parameter_or("wheel_real2sim", false)),
+              get_parameter("experiment").as_string() == "joints"
+                  ? static_cast<int>(get_parameter("joint_mode").as_int())
+                  : 0) {
         load_parameters();
+        if (kind_ == 2
+            && (get_parameter("joint_mode").as_int() < 1
+                || get_parameter("joint_mode").as_int() > 3))
+            throw std::invalid_argument("joint_mode must be 1, 2 or 3");
         register_input("/predefined/update_rate", update_rate_);
         register_input("/predefined/update_count", tick_);
         register_input("/predefined/timestamp", scheduled_time_);
@@ -167,12 +175,20 @@ public:
         register_output("/wheel_leg/sweep/actual_beta_min", actual_beta_min_, nan);
         register_output("/wheel_leg/sweep/actual_beta_max", actual_beta_max_, nan);
         register_output("/wheel_leg/sweep/actual_beta_reached_40", reached_40_, false);
-        RCLCPP_INFO(
-            get_logger(),
-            "Sweep remote=level-v2 experiment=%s side=%d: DOWN/DOWN off, MIDDLE/MIDDLE zero "
-            "effort, matching mode starts immediately. No arming/debounce/fault/completion latch. "
-            "Held mode repeats after completion. 1000 Hz torque / 200 Hz reference.",
-            get_parameter("experiment").as_string().c_str(), side_);
+        if (kind_ == 2)
+            RCLCPP_INFO(
+                get_logger(),
+                "Joint YAML mode=%ld: MIDDLE/MIDDLE starts; other switches zero effort; DOWN/DOWN "
+                "disables and resets completion.",
+                get_parameter("joint_mode").as_int());
+        else
+            RCLCPP_INFO(
+                get_logger(),
+                "Sweep remote=level-v2 experiment=%s side=%d: DOWN/DOWN off, MIDDLE/MIDDLE zero "
+                "effort, matching mode starts immediately. No arming/debounce/fault/completion "
+                "latch. "
+                "Held mode repeats after completion. 1000 Hz torque / 200 Hz reference.",
+                get_parameter("experiment").as_string().c_str(), side_);
     }
 
     void before_updating() override {
@@ -417,7 +433,7 @@ private:
             if (session_.state == SweepState::kStandby)
                 RCLCPP_INFO(
                     get_logger(),
-                    "Standby: zero effort; matching remote mode starts on the next tick.");
+                    "Standby: zero effort; select the configured run switches to start.");
         }
     }
 

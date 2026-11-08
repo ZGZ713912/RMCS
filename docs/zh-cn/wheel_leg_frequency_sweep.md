@@ -33,6 +33,29 @@ ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-wheels-sweep
 
 ## 遥控操作
 
+### 腿扫频：YAML 选项目，双中开始
+
+腿入口不再由上/中、中/上、双上选择项目。启动以下任意一个入口：
+
+| robot | 项目 | 单侧时长 |
+|---|---|---:|
+| `wheel-leg-joints-turn-sweep` | 固定 β=70°，分速度整腿正反转两圈 | 约 213.3 s |
+| `wheel-leg-joints-knee-sweep` | 固定髋角，40°–110°连续开合、端点保持和局部扫频 | 242 s |
+| `wheel-leg-joints-coupled-sweep` | 髋膝局部耦合激励与整腿旋转验证 | 260 s |
+
+例如 `ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-joints-knee-sweep`。
+launch 先加载公共 `wheel-leg-joints-sweep.yaml`，再加载所选项目 YAML，覆盖 `joint_mode` 和 CSV 文件名。
+公共配置中的 `side: left/right` 选择侧别；直接启动旧名称 `wheel-leg-joints-sweep` 默认也是项目 2。
+项目文件是覆盖配置，不应单独直接传给执行器而省略公共配置。
+
+双中立即运行所选项目，其他有效档位零力矩待机，双下失能复位，丢控立即关闭。
+完成后保持零力矩，必须双下复位再双中才可重新运行；仅切换其他档位不能解除完成锁存。
+中途离开双中会停止，回到双中从当前实测位置开始新一轮，不续跑。
+启动前务必双下：程序启动时已经双中且反馈有效会立即开始。零力矩不是位置保持或机械刹停。
+链条松动或存在跳齿风险时应先修复机械传动，不进行高速扫频。
+
+以下旧档位表只适用于历史腿版本；当前轮子/端点操作保持不变，腿以本节为准。
+
 遥控部分直接参考 `ChassisController::update()`：每周期读取当前档位，
 丢控/UNKNOWN 或双下立即关闭，其余档位直接处理，不需要先经过双下或双中。
 

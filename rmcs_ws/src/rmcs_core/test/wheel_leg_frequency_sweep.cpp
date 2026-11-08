@@ -87,6 +87,33 @@ TEST(FrequencySweepSession, CurrentSwitchesStartImmediatelyWithoutResetOrMiddleH
             }
 }
 
+TEST(FrequencySweepSession, FixedYamlProjectsOnlyRunAtBothMiddleAndCompleteOnce) {
+    for (int mode : {1, 2, 3}) {
+        WheelLegSweepSession session(true, true, mode);
+        EXPECT_FALSE(session.update(0, true, Switch::UP, Switch::UP, SweepStop::kNone));
+        ASSERT_TRUE(session.update(1, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
+        EXPECT_EQ(session.mode, mode);
+        EXPECT_FALSE(session.update(2, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
+        EXPECT_EQ(session.run_id, 1u);
+        session.update(3, true, Switch::UP, Switch::MIDDLE, SweepStop::kNone);
+        EXPECT_EQ(session.state, SweepState::kStandby);
+        ASSERT_TRUE(session.update(4, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
+        session.complete();
+        EXPECT_FALSE(session.update(5, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
+        EXPECT_EQ(session.state, SweepState::kComplete);
+        session.update(6, true, Switch::UP, Switch::UP, SweepStop::kNone);
+        EXPECT_FALSE(session.update(7, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
+        EXPECT_EQ(session.state, SweepState::kComplete);
+        session.update(8, false, Switch::UNKNOWN, Switch::UNKNOWN, SweepStop::kNone);
+        EXPECT_FALSE(session.enabled());
+        EXPECT_FALSE(session.update(9, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
+        session.update(10, true, Switch::DOWN, Switch::DOWN, SweepStop::kNone);
+        EXPECT_FALSE(session.enabled());
+        EXPECT_TRUE(session.update(11, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
+        EXPECT_EQ(session.mode, mode);
+    }
+}
+
 TEST(FrequencySweepSession, StartupUnknownAndRemoteRecoveryNeverLatch) {
     WheelLegSweepSession session(false);
     EXPECT_FALSE(session.update(0, false, Switch::UNKNOWN, Switch::UNKNOWN, SweepStop::kNone));

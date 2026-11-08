@@ -33,17 +33,23 @@ class MyLaunchDescriptionEntity(LaunchDescriptionEntity):
             )
         )
 
+        config_dir = os.path.join(
+            FindPackageShare("rmcs_bringup").perform(context), "config"
+        )
+        parameters = []
+        if robot_name in {
+            "wheel-leg-joints-turn-sweep",
+            "wheel-leg-joints-knee-sweep",
+            "wheel-leg-joints-coupled-sweep",
+        }:
+            parameters.append(os.path.join(config_dir, "wheel-leg-joints-sweep.yaml"))
+        parameters.append(os.path.join(config_dir, robot_name + ".yaml"))
+
         entities.append(
             Node(
                 package="rmcs_executor",
                 executable="rmcs_executor",
-                parameters=[
-                    os.path.join(
-                        FindPackageShare("rmcs_bringup").perform(context),
-                        "config",
-                        robot_name + ".yaml",
-                    ),
-                ],
+                parameters=parameters,
                 respawn=True,
                 respawn_delay=1.0,
                 output="log",  # stdout and stderr are logged to launch log file and stderr to the screen.
