@@ -256,6 +256,42 @@ def validate_rollouts(model, time, q, velocity, torque, holdout, stage):
             "window_s": .15, "observations": len(position_errors)}
 
 
+def motion_audit(data, axis, running):
+    motor, sweep = f"/wheel_leg/{axis}/", S + axis + "/"
+    v, tau = data[sweep + "model_velocity"], data[motor + "torque"]
+    time = data[S + "control_steady_ns"]
+    seq = data[motor + "feedback_sequence"]
+    fresh = running & np.r_[False, np.diff(seq) > 0]
+    dt = np.r_[0., np.diff(time).astype(float) * 1e-9]
+    adjacent = fresh & np.r_[False, running[:-1]] & (dt > 0) & (dt < .01)
+    still = np.abs(v) < .02
+    events = adjacent & ~still & np.r_[False, still[:-1]]
+    finite = fresh & np.isfinite(v) & np.isfinite(tau)
+    result = {"scope": "motor-side screening, not isolated static friction or backlash identification",
+              "stationary_fraction": float(np.mean(still[running])),
+              "breakaway_candidates": int(np.count_nonzero(events)),
+              "breakaway_feedback_torque_api_nm": tau[events & np.isfinite(tau)].tolist()[:100],
+              "breakaway_speed_jump_abs_p95_rad_s": float(np.percentile(np.abs(np.diff(v, prepend=v[0]))[events], 95)) if np.any(events) else None,
+              "stationary_torque_rise_records": int(np.count_nonzero(adjacent & still & (np.diff(np.abs(tau), prepend=abs(tau[0])) > .01))),
+              "direction_groups": {}}
+    for name, mask in (("positive", v > .05), ("negative", v < -.05)):
+        selected = finite & mask
+        result["direction_groups"][name] = {"samples": int(np.count_nonzero(selected)),
+            "median_feedback_torque_api_nm": float(np.median(tau[selected])) if np.any(selected) else None}
+    compensation = sweep + "load_compensation_model"
+    if compensation in data:
+        values = data[compensation][fresh]
+        values = values[np.isfinite(values)]
+        result["load_compensation_abs_p95_nm"] = float(np.percentile(np.abs(values), 95)) if len(values) else None
+    temperature = motor + "temperature_mos"
+    if temperature in data:
+        values = data[temperature]
+        valid = finite & np.isfinite(values)
+        result["temperature_groups_10c"] = {str(int(group)): int(np.count_nonzero(valid & (np.floor(values / 10) * 10 == group)))
+            for group in np.unique(np.floor(values[valid] / 10) * 10)}
+    return result
+
+
 def analyze(data, incomplete, fit=False):
     state, active = data[S + "state"], data[S + "reference_active"]
     running = (state == 3) & (active == 1)
@@ -280,6 +316,19 @@ def analyze(data, incomplete, fit=False):
     side = "left" if sides[0] == 0 else "right"
     axes = [f"{side}_{joint}_joint" for joint in ("hip", "knee")]
     report["side"] = side
+    gaps = np.diff(data[S + "control_steady_ns"]).astype(float) * 1e-9
+    report["timing_audit"] = {"nonpositive_intervals": int(np.count_nonzero(gaps <= 0)),
+        "intervals_over_2ms": int(np.count_nonzero(gaps > .002))}
+    if "/predefined/update_count" in data:
+        report["timing_audit"]["executor_count_discontinuities"] = int(np.count_nonzero(np.diff(data["/predefined/update_count"]) != 1))
+    beta_name = S + side + "/beta_estimate"
+    if beta_name in data:
+        beta = np.rad2deg(data[beta_name])
+        valid = running & np.isfinite(beta)
+        report["beta_coverage"] = {"scope": "motor-encoder FK estimate; not independent output-side measurement",
+            "bins_5deg_records": {str(lo): int(np.count_nonzero(valid & (beta >= lo) & (beta < lo + 5))) for lo in range(40, 110, 5)},
+            "within_1deg_of_40_records": int(np.count_nonzero(valid & (np.abs(beta - 40) <= 1))),
+            "within_1deg_of_110_records": int(np.count_nonzero(valid & (np.abs(beta - 110) <= 1)))}
     for axis in axes:
         q = data[S + axis + "/model_angle"]
         v = data[S + axis + "/model_velocity"]
@@ -288,15 +337,29 @@ def analyze(data, incomplete, fit=False):
             "speed_abs_p95_rad_s": float(np.percentile(np.abs(v[running]), 95)),
             "tracking_rms_rad": float(np.sqrt(np.nanmean(e[running] ** 2))),
             "saturated_fraction": float(np.mean(data[S + axis + "/saturated"][running])),
-            "repeated_feedback_fraction": float(np.mean(np.diff(data[f"/wheel_leg/{axis}/feedback_sequence"]) == 0))}
+             "repeated_feedback_fraction": float(np.mean(np.diff(data[f"/wheel_leg/{axis}/feedback_sequence"]) == 0))}
+        report["axes"][axis]["motion_audit"] = motion_audit(data, axis, running)
     if not fit:
         report["accepted"] = True
-        report["fit_status"] = "audit only; use --fit-local on excitation-v3/v4 mode 3 for candidate models"
+        report["fit_status"] = "audit only; not model acceptance; use --fit-local on revision 3/4/7 mode 3"
         return report
     required = [S + name for name in ("excitation_revision", "stage_elapsed_s", "stage_duration_s")]
     if any(name not in data for name in required):
-        report["rejection_reasons"] = ["missing excitation-v3/v4 stage metadata and independent probe provenance"]
+        report["rejection_reasons"] = ["missing revision 3/4/7 stage metadata and independent probe provenance"]
         return report
+    revisions = np.unique(data[S + "excitation_revision"][running])
+    if not np.all(np.isin(revisions, [3, 4, 7])):
+        report["rejection_reasons"] = ["unsupported excitation revision"]
+        return report
+    if 7 in revisions:
+        required_v7 = [S + axis + "/load_compensation_model" for axis in axes]
+        required_v7 += [f"/wheel_leg/{axis}/{field}" for axis in axes
+                        for field in ("tau_frame_api", "tx_kind", "tx_queued_steady_ns")]
+        missing = [name for name in required_v7 if name not in data]
+        if missing:
+            report["rejection_reasons"] = ["revision 7 missing provenance: " + ", ".join(missing)]
+            return report
+        report["compensation_contract"] = "known controller contribution; plant input is measured total torque, never subtract compensation twice"
     # Reject partial segments and never let a holdout segment become training rows.
     eligible = np.zeros(len(state), dtype=bool)
     segment_masks = []
@@ -304,7 +367,7 @@ def analyze(data, incomplete, fit=False):
         mask = running & (data[S + "run_id"] == run) & (data[S + "stage"] == stage)
         indices = np.flatnonzero(mask)
         revisions = np.unique(data[S + "excitation_revision"][mask])
-        if len(indices) < 500 or len(revisions) != 1 or revisions[0] not in (3, 4):
+        if len(indices) < 500 or len(revisions) != 1 or revisions[0] not in (3, 4, 7):
             continue
         if not np.all(np.isin(data[S + "waveform"][mask], [4, 6])):
             continue

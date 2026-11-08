@@ -9,10 +9,26 @@ import unittest
 import numpy as np
 from scipy.signal import lfilter
 
-from analyze_joint_sweep import S, analyze, fit_delay, fit_local, read_csv, tune_pd, validate_rollouts
+from analyze_joint_sweep import S, analyze, fit_delay, fit_local, motion_audit, read_csv, tune_pd, validate_rollouts
 
 
 class JointSweepAnalysisTest(unittest.TestCase):
+    def test_motion_audit_reports_candidates_not_static_friction_truth(self):
+        motor, sweep = "/wheel_leg/left_knee_joint/", S + "left_knee_joint/"
+        n = 8
+        data = {S + "control_steady_ns": np.arange(n, dtype=np.int64) * 1_000_000,
+                motor + "feedback_sequence": np.arange(n),
+                sweep + "model_velocity": np.array([0., 0., 0., .2, .3, 0., -.2, -.3]),
+                motor + "torque": np.arange(n, dtype=float),
+                motor + "temperature_mos": np.array([21., 21., 21., 21., 31., 31., 31., 31.]),
+                sweep + "load_compensation_model": np.ones(n)}
+        report = motion_audit(data, "left_knee_joint", np.ones(n, dtype=bool))
+        self.assertEqual(report["breakaway_candidates"], 2)
+        self.assertEqual(report["stationary_torque_rise_records"], 3)
+        self.assertEqual(report["direction_groups"]["positive"]["samples"], 2)
+        self.assertEqual(report["temperature_groups_10c"], {"20": 3, "30": 4})
+        self.assertIn("not isolated static friction", report["scope"])
+
     def test_inactive_csv_cannot_produce_identification_or_gains(self):
         data = {S + "state": np.full(1000, 6), S + "reference_active": np.zeros(1000),
                 S + "control_steady_ns": np.arange(1000, dtype=np.int64) * 1_000_000,
@@ -142,6 +158,19 @@ class JointSweepAnalysisTest(unittest.TestCase):
         data[S + "excitation_revision"].fill(4)
         report_v4 = analyze(data, [], fit=True)
         self.assertTrue(report_v4["accepted"], report_v4)
+        data[S + "excitation_revision"].fill(7)
+        missing_v7 = analyze(data, [], fit=True)
+        self.assertFalse(missing_v7["accepted"])
+        self.assertIn("missing provenance", missing_v7["rejection_reasons"][0])
+        for joint in ("hip", "knee"):
+            data[S + f"left_{joint}_joint/load_compensation_model"] = np.full(count, 8.)
+        report_v7 = analyze(data, [], fit=True)
+        self.assertTrue(report_v7["accepted"], report_v7)
+        self.assertIn("never subtract", report_v7["compensation_contract"])
+        self.assertIn("motion_audit", report_v7["axes"]["left_knee_joint"])
+        self.assertIn("beta_coverage", report_v7)
+        for model in report_v7["local_models"]:
+            np.testing.assert_allclose(model["M"], m, atol=1e-3)
         data[S + "excitation_revision"].fill(5)
         self.assertFalse(analyze(data, [], fit=True)["accepted"])
         data[S + "excitation_revision"].fill(4)
