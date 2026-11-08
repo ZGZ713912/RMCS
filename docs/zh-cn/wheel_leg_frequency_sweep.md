@@ -1,6 +1,6 @@
 # wheel_leg 扫频与气簧辨识
 
-四个独立入口位于 `rmcs_ws/src/rmcs_bringup/config`，都由硬件、
+独立入口位于 `rmcs_ws/src/rmcs_bringup/config`，都由硬件、
 `WheelLegFrequencySweepController`、`ValueCollector` 构成，没有 RL 推理组件。
 执行器和主机力矩反馈环为 1000 Hz，目标每五个控制周期更新一次（200 Hz）。
 本实现的离线测试不加载硬件插件。实车实验由操作员启动。
@@ -42,6 +42,8 @@ ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-wheels-sweep
 | `wheel-leg-joints-turn-sweep` | 固定 β=70°，分速度整腿正反转两圈 | 约 213.3 s |
 | `wheel-leg-joints-knee-sweep` | 固定髋角，40°–110°连续开合、端点保持和局部扫频 | 242 s |
 | `wheel-leg-joints-coupled-sweep` | 髋膝局部耦合激励与整腿旋转验证 | 260 s |
+| `wheel-leg-joints-friction-sweep` | 逐轴正反向起动、低速爬行与换向 | 1196 s |
+| `wheel-leg-joints-load-sweep` | 装机负载双向保持与两档慢速开合 | 753 s |
 
 例如 `ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-joints-knee-sweep`。
 launch 先加载公共 `wheel-leg-joints-sweep.yaml`，再加载所选项目 YAML，覆盖 `joint_mode` 和 CSV 文件名。
@@ -114,7 +116,81 @@ launch 先加载公共 `wheel-leg-joints-sweep.yaml`，再加载所选项目 YAM
 CSV 新增每轴 `load_compensation_model`（模型坐标 Nm），以及 `actual_beta_min/max`（rad）
 和 `actual_beta_reached_40`（实际 FK β 在 39°–41°出现过）。这些统计每次开始/复位清除，
 完成时输出实际覆盖日志；覆盖标志不代表有足够有效、未饱和、连续运动数据。
-关节激励版本改为 7。离线辨识应使用实际反馈力矩，并保留补偿列，不能只用原 PD 公式重建输入。
+原三个关节项目的激励版本为 7，新增摩擦和负载项目为 8。离线辨识应使用实际反馈总力矩，
+保留补偿列，不能只用原 PD 公式重建输入，也不能再从输入总力矩中扣一次积分补偿。
+
+## 低速摩擦和装机负载项目（revision 8）
+
+项目 4 在 β=50/75/100°分别测髋、膝驱动轴；被测电机改变轴角时，另一电机轴角保持。
+这与“解剖髋角固定”或“膝内角固定”不同；参考仍通过既有左右闭链标定表换算。
+每个中心都有完整的训练和验证重复。两者分别保存，分析不能随机拆行。
+
+- 起动试验前保持 4 s。进入探测段后冻结被测轴的负载积分，
+  将该时刻级联控制总力矩作为恒定偏置；探测期间被测轴不施加位置 P 或速度 P。
+  在偏置上按指定电机方向增加 1 Nm/s，最多增加 6 Nm，仍受最终 ±40 Nm 限幅。
+  入口速度大于 0.02 rad/s 或误差大于 0.02 rad 时不执行这次力矩斜坡。
+- 新反馈帧显示同方向位移达到 0.003 rad，或连续三个独立速度帧超过 0.04 rad/s，
+  就结束斜坡并恢复级联位置保持。错误方向运动也结束该次试验并标记无效。
+  6 s 未起动的结果只提供截尾信息，不输出一个虚构的静摩擦点。
+  每个探测段共 8 s，剩余时间用于恢复；这些是试验阶段转换，不改变原遥控/失能规则。
+- 爬行采用单个电机轴 0.12 rad 的往返行程，目标平台速度为
+  0.01/0.025/0.05/0.1/0.2 rad/s，首尾各有 0.2 s 平滑加减速，换向前保持 1 s。
+  级联控制和负载积分正常工作。`joint_friction_span_rad`、`joint_friction_speeds_rad_s` 可配置。
+  当前 DM 速度范围 ±45 rad/s、12 位编码，步长约 0.022 rad/s；
+  因此爬行统计采用独立编码器帧 0.1–0.2 s 窗口的位移估速，原速度反馈保留用于对照。
+
+`breakaway_phase`：0 非试验，1 恒偏置加斜坡，2 检测到运动后恢复，3 到幅值上限未起动，
+4 入口未稳定，5 错误方向运动。CSV 同时记录 `probe_axis`（0 髋驱动、1 膝驱动）、
+`approach_direction`（模型电机轴方向）、`breakaway_origin_rad`、`breakaway_bias_model_nm`、
+`breakaway_event_elapsed_s`、每轴 `model_sign` 与原有总力矩/探针/积分列。
+起动正反向静止力矩区间的中心和半宽属于装机等效量；静态负载、方向预载、密封和传动阻力仍可能混合。
+单编码器不支持独立测出输出端背隙与传动刚度，分析将这些参数保留为空。
+
+项目 5 依次从两方向到达 40/50/60/70/80/90/100/110°，移动 2 s、默认保持 12 s，
+再以不同重复执行完整验证。保持时长可用 `joint_load_hold_s` 选择。
+40°、110°在工作域端点，不能从域外接近；其方向 0 为重复保持，不能声称测得端点两侧迟滞。
+随后在固定髋参考下执行 60 s、15 s 单程的全域平滑开合，各有独立验证往返。
+它提供装机保持负载和速度/方向相关负载数据；电流力矩不能唯一拆分气体压力、密封摩擦和关节摩擦。
+
+公共配置 `joint_fixture: horizontal/vertical` 表示操作员声明的装夹条件，CSV 对应 `fixture=0/1`；
+声明本身不验证装夹。水平测试降低重力干扰，竖直台架数据用来检验保留 CAD 重力模型后的迁移。
+左右侧分别采集；不得把一侧结果当成另一侧实测。两个新增项目不修改原项目 1–3 的轨迹。
+
+推荐在采集容器内冻结一次完整参数和源码快照。以下命令只准备文件，不启动硬件：
+
+```bash
+python3 .script/identification/prepare_leg_characterization.py \
+  --project friction --side left --fixture horizontal \
+  --output .codex/report/leg-id-left-horizontal-friction
+```
+
+`--project load` 准备负载项目。输出包含完整 `parameters.yaml`、源码快照、源提交/工作区状态、SHA-256、
+`manifest.json` 和供操作员使用的 `launch-command.txt`；发现已构建控制库时记录其 SHA-256。
+输出目录必须不存在，避免覆盖先前原始数据。
+命令应在准备文件的同一容器路径中执行；启动前核实实物夹具、侧别及编译版本。
+实际由操作员启动后仍是双中开始、双下失能复位，原始数据保存为该目录的 `raw.csv`。
+默认独立 YAML 入口也可使用，但冻结入口额外把绑定参数和源码的整数 `contract_id` 写入每行 CSV。
+
+采集后运行：
+
+```bash
+python3 .script/identification/analyze_leg_characterization.py \
+  .codex/report/leg-id-left-horizontal-friction/raw.csv \
+  --manifest .codex/report/leg-id-left-horizontal-friction/manifest.json \
+  --output .codex/report/leg-id-left-horizontal-friction/analysis.json
+```
+
+分析剔除不完整段、饱和/故障、超过 5 ms 的控制间断和过期/不同步反馈。
+起动试验必须存在冻结积分和静止阈值区间；相反方向必须匹配实际姿态，温差不超过 3°C。
+爬行片段用相同实际姿态和相近实际速度配对，报告卡滞占比；卡滞占比超过 10% 不进入连续摩擦拟合。
+五档有效速度及完整验证均存在时才尝试非负的等效 Coulomb+viscous 拟合；Stribeck 速度不强行拟合，保留空值和原始低速曲线。
+保持图使用最后 3 s 的独立帧，要求速度 ≤0.02 rad/s、位置误差 ≤0.01 rad、
+β 波动/目标偏差 ≤0.5°、力矩趋势 ≤0.05 Nm/s；12 s 到时未收敛即报告缺失。
+`--holdout-torque-tolerance-nm` 默认 0.5 Nm，是可配置的离线一致性判据，不代表实际精度保证。
+`coverage` 和 `remaining` 列出该侧该夹具还缺的单元；合同不一致会拒绝，不能通过重复采相同单元凑齐覆盖。
+一次分析只选择一个运行号；同一 CSV 中途停止重开时使用 `--run-id <运行号>`，不混合起始姿态。
+报告中的 `accepted` 仅表示本项目的数据和验证覆盖，始终保留 `runtime_admissible=false`、`real2sim_ready=false`。
+参数进入新模型前仍须做同参考闭环连续回放和独立台架验证；本入口不修改 URDF/USD 或训练参数。
 
 ## 轨迹和探测
 
@@ -171,9 +247,9 @@ IMU、非活动电机及驱动状态不锁存扫描退出；保留电流/力矩�
 关节扫频主机和驱动均限 **40 Nm**；端点入口两层限幅为 20 Nm。
 关节入口现使用外环位置 P + 内环速度 P（`joint_control_law: cascade_pp`），
 髋/膝的 `joint_position_kp=[40,40]` s⁻¹、`joint_velocity_kp=[4,4]` Nm·s/rad。
-两环均在 1000 Hz 反馈周期计算；不加积分和内环速度微分。
+两环均在 1000 Hz 反馈周期计算；两环自身不加积分或内环速度微分，负载积分另行叠加。
 速度目标为 `clip(dq_ref + 40*(q_ref-q), -8.5, 8.5)` rad/s，
-模型力矩为 `4*(dq_target-dq) + probe`，经标定符号转换后最终限幅 ±40 Nm。
+模型力矩为 `4*(dq_target-dq) + probe + load_I`，经标定符号转换后最终限幅 ±40 Nm。
 这项速度目标限幅属于级联控制器，不是实测速度越界停机；轨迹本身不自动减幅。
 不触发速度目标限幅时相当于位置 PD 160/4，保留原轨迹速度前馈。
 这些是基于原 120/4 数据的保守起始值，尚未实机验证最优性，也不能消除气簧的稳态误差。
@@ -183,7 +259,7 @@ CSV 的 `host/joint_control_law` 为 1 时表示级联；为 0 时表示单环�
 详见 `reports/wheel_leg_sweep_identification_20261027/leg_cascade_pp.md`。
 高速参数可通过 `joint_turn_speeds_rad_s`、`joint_fast_turn_period_s` 修改，
 模式 2 的参考范围及单程时间由 `joint_knee_beta_deg`、`joint_knee_half_periods_s` 配置。
-局部力矩激励通过 `joint_probe_torque_nm` 修改。每轮启动时打印 `Joint excitation-v4` 参数摘要；
+局部力矩激励通过 `joint_probe_torque_nm` 修改。每轮启动时打印实际 `Joint excitation-v7/v8` 参数摘要；
 每秒关节参考/实测位置、速度、误差、力矩、探针、饱和状态和 β 的控制台打印已关闭，CSV 采集保留。
 每轮正常完成时打印一次 `Sweep complete`，包含实验类型、侧别、模式、运行号和用时，
 完成当周期六轴控制力矩归零。执行器 `Component 5s` 和 `Update/Skipped` 周期统计日志的调用已注释。
@@ -277,7 +353,7 @@ CSV 的 `host/joint_control_law` 为 1 时表示级联；为 0 时表示单环�
 | `sweep/stop_reason` | 0 无、1 双下、2 丢控/UNKNOWN、3 无效档、4 双中结束、5 切换模式、6 正常完成、7 反馈超时、8 非有限数据、9 驱动故障、10 实际使能丢失/未确认 |
 | `sweep/experiment`, `side`, `mode`, `run_id` | 1 轮子/2 关节/3 端点；侧别 -1/0/1=轮子/左/右；扫描模式；单进程递增运行号 |
 | `stage`, `waveform`, `validation` | 轨迹段、波形及训练/验证分组。关节波形 0 准备/1 平移或保持/2 整周/3 扫频/4 旋转多正弦/5 探测/6 局部多正弦与力矩探针/7 连续开合与膝力矩探针 |
-| `excitation_revision`, `stage_elapsed_s`, `stage_duration_s` | 关节激励版本 4、轮子高速版本 5、轮子 real2sim 版本 6；版本 3 为历史关节慢扫。记录当前段参考时间及完整段时长，用于剔除中断片段 |
+| `excitation_revision`, `stage_elapsed_s`, `stage_duration_s` | 关节动态版本 7、摩擦/装机负载版本 8、轮子高速版本 5、轮子 real2sim 版本 6；3/4 为历史关节版本。记录当前段参考时间及完整段时长，用于剔除中断片段 |
 | `enable_request`, `identification/enable_requested` | 控制器请求与硬件门控后的请求；均不代替实际 DM `status_code` |
 | `drives_ready`, `reference_active`, `completed` | 实际启停组合是否就绪、PD 是否活动、上一次扫描是否正常完成 |
 | `feedback_diagnostic` | 全六电机和 IMU 的诊断原因，沿用 stop_reason 编号；不会阻止活动电机的扫描 |
@@ -328,7 +404,7 @@ real2sim 完成后需先双中或双下才能再次启动；其他入口保持�
 
 ```bash
 python3 .script/identification/analyze_joint_sweep.py <CSV路径> \
-  --fit-local --output reports/leg_sweep_debug/joint_identification.json
+  --fit-local --output .codex/report/leg-id-dynamic/joint_identification.json
 
 python3 -m unittest discover -s .script/identification -p joint_sweep_analysis_test.py -v
 ```
@@ -345,9 +421,9 @@ python3 -m unittest discover -s .script/identification -p joint_sweep_analysis_t
   局部段与实际速度达到高速的 `waveform=4` 段分别拟合/独立验证；不把位置跟踪滞后直接叫作执行器纯延迟。
   结果包含传输、驱动及反馈测量影响，不能拆分成单独的 CAN 或驱动执行延迟。
 - **PD 搜索**：只有局部模型和局部延迟通过验证，才在耦合模型上搜索对角 PD，
-  沿用当前纯 PD 公式，包含拟合延迟/一阶滞后、静态载荷造成的稳态偏差及 CSV 记录的力矩限幅（当前为 40 Nm），
+  使用对角 PD 候选公式，包含拟合延迟/一阶滞后、静态载荷造成的稳态偏差及 CSV 记录的力矩限幅（当前为 40 Nm），
   以两轴 0.05 rad 阶跃误差和饱和比例选候选。
-  输出 `auto_applied=false`，不覆盖生产 YAML。采集初值 120/4 与辨识后的候选分开记录。
+  输出 `auto_applied=false`，不覆盖生产 YAML。这不是 v7 级联加负载积分的同参考回放，不能据此替换采集控制器。
 
 输出始终保留 `real2sim_ready=false`：这里新增的是**局部有效模型、等效延迟和离线 PD 候选**。
 整圈真实闭链模型中的变惯量、科氏项、重力、气簧，以及落地接触需要进一步仿真复现和独立实车验证；

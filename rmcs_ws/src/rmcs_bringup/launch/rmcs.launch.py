@@ -41,6 +41,8 @@ class MyLaunchDescriptionEntity(LaunchDescriptionEntity):
             "wheel-leg-joints-turn-sweep",
             "wheel-leg-joints-knee-sweep",
             "wheel-leg-joints-coupled-sweep",
+            "wheel-leg-joints-friction-sweep",
+            "wheel-leg-joints-load-sweep",
         }:
             parameters.append(os.path.join(config_dir, "wheel-leg-joints-sweep.yaml"))
         parameters.append(os.path.join(config_dir, robot_name + ".yaml"))

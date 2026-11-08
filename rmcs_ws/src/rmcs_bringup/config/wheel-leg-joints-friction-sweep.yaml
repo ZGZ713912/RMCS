@@ -1,0 +1,8 @@
+frequency_sweep:
+  ros__parameters:
+    joint_mode: 4
+    joint_friction_speeds_rad_s: [0.01, 0.025, 0.05, 0.1, 0.2]
+    joint_friction_span_rad: 0.12
+value_collector:
+  ros__parameters:
+    csv_path: "/tmp/wheel_leg_joints_friction_<timestamp>.csv"

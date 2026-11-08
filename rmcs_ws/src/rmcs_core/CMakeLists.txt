@@ -45,6 +45,8 @@ if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     ament_add_gtest(wheel_leg_sweep_plan test/wheel_leg_frequency_sweep.cpp)
     target_include_directories(wheel_leg_sweep_plan PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_definitions(wheel_leg_sweep_plan PRIVATE
+        RMCS_BRINGUP_CONFIG_DIR="${PROJECT_SOURCE_DIR}/../rmcs_bringup/config")
     target_link_libraries(wheel_leg_sweep_plan ${PROJECT_NAME})
     ament_add_gtest(wheel_leg_cascade_pp test/wheel_leg_cascade_pp.cpp)
     target_include_directories(wheel_leg_cascade_pp PRIVATE ${PROJECT_SOURCE_DIR}/src)

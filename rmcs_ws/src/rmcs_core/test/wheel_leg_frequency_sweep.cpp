@@ -9,6 +9,7 @@
 #include "hardware/device/dji_motor.hpp"
 #include "hardware/device/dm_motor.hpp"
 #include "hardware/util/wheel_leg_drive.hpp"
+#include "identification/wheel_leg_breakaway_probe.hpp"
 #include "identification/wheel_leg_limit_probe.hpp"
 #include "identification/wheel_leg_load_compensation.hpp"
 #include "identification/wheel_leg_sweep_session.hpp"
@@ -67,6 +68,45 @@ TEST(FrequencySweepLoad, RemovesStaticLoadOffsetWithinAvailableTorque) {
     EXPECT_LT(std::abs(dq), .001);
 }
 
+TEST(FrequencySweepBreakaway, StopsAtIndependentMotionAndDoesNotCountRepeatedFrames) {
+    WheelLegBreakawayProbe probe;
+    probe.start(10, .4, 0, 0, 12, -1);
+    probe.update(11, .4, 0, 1);
+    EXPECT_EQ(probe.phase, 1);
+    EXPECT_DOUBLE_EQ(probe.increment_nm, -1);
+    probe.update(11.001, .4, -.05, 2);
+    for (int i = 0; i < 10; ++i)
+        probe.update(11.002 + i * .001, .4, -.05, 2);
+    EXPECT_EQ(probe.phase, 1);
+    probe.update(11.02, .4, -.05, 3);
+    probe.update(11.03, .4, -.05, 4);
+    EXPECT_EQ(probe.phase, 2);
+    EXPECT_DOUBLE_EQ(probe.increment_nm, 0);
+    EXPECT_DOUBLE_EQ(probe.bias_nm, 12);
+    probe.update(12, .4, 0, 5);
+    EXPECT_EQ(probe.phase, 2);
+    EXPECT_NEAR(probe.event_elapsed_s, 1.03, 1e-9);
+    probe.reset();
+    EXPECT_EQ(probe.phase, 0);
+    EXPECT_DOUBLE_EQ(probe.bias_nm, 0);
+}
+
+TEST(FrequencySweepBreakaway, CensorsNoMotionAndRejectsUnsettledOrWrongDirection) {
+    WheelLegBreakawayProbe probe;
+    probe.start(0, 0, .1, 0, 10, 1);
+    EXPECT_EQ(probe.phase, 4);
+    probe.start(0, 0, 0, 0, 10, 1);
+    probe.update(6, 0, 0, 1);
+    EXPECT_EQ(probe.phase, 3);
+    EXPECT_DOUBLE_EQ(probe.increment_nm, 0);
+    probe.start(0, 0, 0, 0, 10, 1);
+    probe.update(.1, -.004, 0, 2);
+    EXPECT_EQ(probe.phase, 5);
+    probe.start(0, 0, 0, 0, 10, 1);
+    probe.update(.1, .004, 0, 3);
+    EXPECT_EQ(probe.phase, 2);
+}
+
 TEST(FrequencySweepSession, CurrentSwitchesStartImmediatelyWithoutResetOrMiddleHistory) {
     constexpr std::array switches{Switch::DOWN, Switch::MIDDLE, Switch::UP};
     for (bool joints : {false, true})
@@ -88,7 +128,7 @@ TEST(FrequencySweepSession, CurrentSwitchesStartImmediatelyWithoutResetOrMiddleH
 }
 
 TEST(FrequencySweepSession, FixedYamlProjectsOnlyRunAtBothMiddleAndCompleteOnce) {
-    for (int mode : {1, 2, 3}) {
+    for (int mode : {1, 2, 3, 4, 5}) {
         WheelLegSweepSession session(true, true, mode);
         EXPECT_FALSE(session.update(0, true, Switch::UP, Switch::UP, SweepStop::kNone));
         ASSERT_TRUE(session.update(1, true, Switch::MIDDLE, Switch::MIDDLE, SweepStop::kNone));
@@ -418,6 +458,70 @@ TEST(FrequencySweepTrajectories, LocalProbesAreIndependentBoundedAndHaveComplete
     EXPECT_LT(std::abs(cross / std::sqrt(hip_energy * knee_energy)), .2);
 }
 
+TEST(FrequencySweepTrajectories, FrictionUsesOneMotorAtATimeOnBothCalibratedSides) {
+    for (bool right : {false, true}) {
+        auto g = geometry(right);
+        WheelLegJointSweepPlan plan(g, right ? 1 : -1);
+        plan.start(4, {0, g.at(70 * rad).position}, 0, 40 * rad, 110 * rad);
+        EXPECT_NEAR(plan.duration(), 1196, 1e-9);
+        std::array<int, 2> breakaway{}, crawl{};
+        for (const auto& segment : plan.segments()) {
+            if (segment.kind == 8) {
+                ++breakaway[segment.validation];
+                EXPECT_GE(segment.probe_axis, 0);
+                EXPECT_LE(segment.probe_axis, 1);
+                continue;
+            }
+            if (segment.kind != 9)
+                continue;
+            ++crawl[segment.validation];
+            const auto middle = plan.at(segment.start + segment.duration / 2);
+            EXPECT_NEAR(
+                std::abs(middle.dq[segment.probe_axis]), .12 / (segment.duration - .2), 1e-9);
+            EXPECT_NEAR(middle.dq[1 - segment.probe_axis], 0, 1e-9);
+            EXPECT_EQ(middle.direction, segment.direction);
+            const auto first = plan.at(segment.start),
+                       last = plan.at(segment.start + segment.duration - 1e-7);
+            EXPECT_NEAR(first.dq[segment.probe_axis], 0, 1e-9);
+            EXPECT_NEAR(last.dq[segment.probe_axis], 0, 1e-9);
+            EXPECT_NEAR(
+                std::abs(last.q[segment.probe_axis] - first.q[segment.probe_axis]), .12, 1e-9);
+            for (double t = .01; t < segment.duration; t += .05) {
+                const auto sample = plan.at(segment.start + t);
+                EXPECT_GE(sample.beta, 40 * rad);
+                EXPECT_LE(sample.beta, 110 * rad);
+                EXPECT_NEAR(sample.q[1] - sample.q[0], g.at(sample.beta).position, 1e-7);
+                EXPECT_EQ(sample.probe_torque, (std::array{0., 0.}));
+            }
+        }
+        EXPECT_EQ(breakaway, (std::array{12, 12}));
+        EXPECT_EQ(crawl, (std::array{60, 60}));
+    }
+}
+
+TEST(FrequencySweepTrajectories, HoldingMapHasTwoApproachesAndIndependentSlowLoops) {
+    auto g = geometry();
+    WheelLegJointSweepPlan plan(g, -1);
+    plan.start(5, {0, g.at(70 * rad).position}, 0, 40 * rad, 110 * rad);
+    EXPECT_NEAR(plan.duration(), 753, 1e-9);
+    std::array<int, 2> holds{}, loops{};
+    for (const auto& segment : plan.segments()) {
+        if (segment.kind == 10) {
+            ++holds[segment.validation];
+            EXPECT_GE(segment.duration, 6);
+            const auto sample = plan.at(segment.start + segment.duration / 2);
+            EXPECT_DOUBLE_EQ(sample.dq[0], 0);
+            EXPECT_DOUBLE_EQ(sample.dq[1], 0);
+        } else if (segment.kind == 11) {
+            ++loops[segment.validation];
+            EXPECT_NEAR(std::abs(segment.to.beta - segment.from.beta), 70 * rad, 1e-9);
+            EXPECT_NE(segment.direction, 0);
+        }
+    }
+    EXPECT_EQ(holds, (std::array{16, 16}));
+    EXPECT_EQ(loops, (std::array{4, 4}));
+}
+
 TEST(FrequencySweepProbe, DrivesBothEndsAndHoldsTheHip) {
     auto g = geometry();
     WheelLegLimitProbe::Config c;
@@ -511,6 +615,40 @@ TEST(FrequencySweepCsv, StrictModeRejectsMissingAndUnsupportedSignals) {
         check(true, {{"/missing", {typeid(double), rmcs_executor::InterfaceKind::Event}}});
     }
     rclcpp::shutdown();
+}
+
+TEST(FrequencySweepCsv, NewProjectOverlaysConstructControllerWithoutHardwareOnEitherSide) {
+    const std::string directory = RMCS_BRINGUP_CONFIG_DIR;
+    for (const auto& [project, mode] : {std::pair{"friction", 4}, std::pair{"load", 5}})
+        for (const std::string side : {"left", "right"}) {
+            const std::vector<std::string> arguments{
+                "leg_project_test",
+                "--ros-args",
+                "--params-file",
+                directory + "/wheel-leg-joints-sweep.yaml",
+                "--params-file",
+                directory + "/wheel-leg-joints-" + project + "-sweep.yaml",
+                "-p",
+                "frequency_sweep:side:=" + side,
+                "-p",
+                "frequency_sweep:joint_contract_id:=576460752303423495"};
+            std::vector<const char*> argv;
+            for (const auto& argument : arguments)
+                argv.push_back(argument.c_str());
+            rclcpp::init(static_cast<int>(argv.size()), argv.data());
+            {
+                pluginlib::ClassLoader<rmcs_executor::Component> loader{
+                    "rmcs_executor", "rmcs_executor::Component"};
+                rmcs_executor::Component::initializing_component_name = "frequency_sweep";
+                auto controller = loader.createSharedInstance(
+                    "rmcs_core::controller::identification::WheelLegFrequencySweepController");
+                auto node = std::dynamic_pointer_cast<rclcpp::Node>(controller);
+                EXPECT_EQ(node->get_parameter("joint_mode").as_int(), mode);
+                EXPECT_EQ(node->get_parameter("side").as_string(), side);
+                EXPECT_EQ(node->get_parameter("joint_contract_id").as_int(), 576460752303423495LL);
+            }
+            rclcpp::shutdown();
+        }
 }
 
 TEST(FrequencySweepHardware, EnabledSessionKeepsFcAndZeroGainMitWithoutFd) {

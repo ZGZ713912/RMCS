@@ -30,6 +30,7 @@ frequency_sweep:
     experiment: "joints"
     joint_mode: 2
     side: "left"
+    joint_fixture: horizontal
     # Follow current switches every tick; transient modes never latch the final mode.
     reference_frequency_hz: 200.0
     feedback_timeout_s: 0.05
@@ -52,7 +53,7 @@ frequency_sweep:
     beta_max_deg: 110.0
     # Model coordinates, hip/knee order. Conservative data-informed starting gains.
     # v_target=clip(v_ref+P_position*(q_ref-q), +/-8.5); tau=P_velocity*(v_target-v)+probe.
-    # Equivalent unsaturated position PD: 160/4. No I or inner-loop D.
+    # Equivalent unsaturated position PD: 160/4; bounded load I is configured below.
     joint_control_law: cascade_pp
     joint_position_kp: [40.0, 40.0]
     joint_velocity_kp: [4.0, 4.0]
@@ -126,6 +127,18 @@ value_collector:
       - /wheel_leg/sweep/feedback_diagnostic
       - /wheel_leg/sweep/reference_active
       - /wheel_leg/sweep/excitation_revision
+      - /wheel_leg/sweep/fixture
+      - /wheel_leg/sweep/contract_id
+      - /wheel_leg/sweep/probe_axis
+      - /wheel_leg/sweep/approach_direction
+      - /wheel_leg/sweep/breakaway_phase
+      - /wheel_leg/sweep/breakaway_bias_model_nm
+      - /wheel_leg/sweep/breakaway_origin_rad
+      - /wheel_leg/sweep/breakaway_event_elapsed_s
+      - /wheel_leg/sweep/left_hip_joint/model_sign
+      - /wheel_leg/sweep/left_knee_joint/model_sign
+      - /wheel_leg/sweep/right_hip_joint/model_sign
+      - /wheel_leg/sweep/right_knee_joint/model_sign
       - /wheel_leg/sweep/stage_elapsed_s
       - /wheel_leg/sweep/stage_duration_s
       - /wheel_leg/sweep/reference_sequence

@@ -28,6 +28,7 @@ public:
     }
 
     void reset() { value_ = 0; }
+    double value() const { return value_; }
 
 private:
     double value_ = 0;

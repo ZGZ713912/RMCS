@@ -25,10 +25,10 @@ inline SweepScalar sweep_blend(double from, double to, double t, double duration
         d * 60 * x * (1 - x) * (1 - 2 * x) / (duration * duration)};
 }
 
-inline SweepScalar sweep_turn(double from, double to, double t, double duration) {
-    constexpr double ramp = 1.0;
+inline SweepScalar
+    sweep_turn(double from, double to, double t, double duration, double ramp = 1.0) {
     const double sign = to >= from ? 1 : -1, v = std::abs(to - from) / (duration - ramp);
-    const auto head = [v](double s) {
+    const auto head = [v, ramp](double s) {
         const double phase = std::numbers::pi * s / ramp;
         return SweepScalar{
             v * (s / 2 - ramp / (2 * std::numbers::pi) * std::sin(phase)),
@@ -55,12 +55,16 @@ public:
         std::array<double, 2> probe_torque_nm{1, 1};
         std::array<double, 2> knee_beta_deg{40, 110};
         std::array<double, 3> knee_half_periods_s{4, 2, 1};
+        std::array<double, 5> friction_speeds{.01, .025, .05, .1, .2};
+        double friction_span_rad = .12;
+        double load_hold_s = 12;
     };
     struct Sample {
         std::array<double, 2> q{}, dq{}, ddq{}, probe_torque{};
         double theta = 0, beta = 0, dtheta = 0, dbeta = 0;
         int segment = 0, kind = 0;
         bool beta_valid = true, validation = false;
+        int probe_axis = -1, direction = 0;
     };
     struct Pose {
         double theta, beta;
@@ -72,6 +76,7 @@ public:
                   // 6: local probe, 7: continuous knee sweep with independent torque probe
         double amplitude = 0, f0 = 0, f1 = 0;
         bool validation = false;
+        int probe_axis = -1, direction = 0;
     };
 
     WheelLegJointSweepPlan(PairGeometry geometry, double hip_sign)
@@ -96,6 +101,19 @@ public:
         for (double half_period : config_.knee_half_periods_s)
             if (!std::isfinite(half_period) || half_period < 1 || half_period > 20)
                 throw std::invalid_argument("Invalid knee excitation half-period");
+        for (double speed : config_.friction_speeds)
+            if (!std::isfinite(speed) || speed < .005 || speed > .3)
+                throw std::invalid_argument("Invalid friction crawl speed");
+        if (!std::isfinite(config_.friction_span_rad) || config_.friction_span_rad < .04
+            || config_.friction_span_rad > .2 || !std::isfinite(config_.load_hold_s)
+            || config_.load_hold_s < 6 || config_.load_hold_s > 60)
+            throw std::invalid_argument("Invalid friction stroke or load hold time");
+        if (!std::is_sorted(config_.friction_speeds.begin(), config_.friction_speeds.end())
+            || std::adjacent_find(config_.friction_speeds.begin(), config_.friction_speeds.end())
+                   != config_.friction_speeds.end()
+            || config_.friction_span_rad / config_.friction_speeds.back() < .6 - 1e-9)
+            throw std::invalid_argument(
+                "Crawl speeds must increase and leave a measurable plateau");
     }
 
     void start(
@@ -167,6 +185,55 @@ public:
                 add(pose, {theta, pose.beta}, turn_s, 4, 2 * rad, 0, 0, validation);
                 pose = segments_.back().to;
             }
+        } else if (mode == 4) {
+            for (double center : {50.0, 75.0, 100.0}) {
+                add(pose, {theta, center * rad}, 5, 1);
+                pose = segments_.back().to;
+                for (bool validation : {false, true})
+                    for (int axis : {0, 1}) {
+                        for (int direction : {1, -1}) {
+                            add(pose, pose, 4, 1, 0, 0, 0, validation);
+                            add(pose, pose, 8, 8, 0, 0, 0, validation, axis, direction);
+                        }
+                        for (double speed : config_.friction_speeds) {
+                            const auto low =
+                                motor_offset(pose, axis, -config_.friction_span_rad / 2);
+                            const auto high =
+                                motor_offset(pose, axis, config_.friction_span_rad / 2);
+                            if (std::min(low.beta, high.beta) < beta_min
+                                || std::max(low.beta, high.beta) > beta_max)
+                                throw std::invalid_argument("Friction stroke exceeds beta range");
+                            add(pose, low, 2, 1, 0, 0, 0, validation);
+                            const double duration = config_.friction_span_rad / speed + .2;
+                            add(low, high, duration, 9, 0, 0, 0, validation, axis, 1);
+                            add(high, high, 1, 1, 0, 0, 0, validation);
+                            add(high, low, duration, 9, 0, 0, 0, validation, axis, -1);
+                            add(low, low, 1, 1, 0, 0, 0, validation);
+                            add(low, pose, 2, 1, 0, 0, 0, validation);
+                        }
+                    }
+            }
+        } else if (mode == 5) {
+            for (bool validation : {false, true})
+                for (int direction : {1, -1})
+                    for (int i = 0; i < 8; ++i) {
+                        const Pose target{
+                            theta, (direction > 0 ? 40 + 10 * i : 110 - 10 * i) * rad};
+                        if (target.beta < beta_min || target.beta > beta_max)
+                            throw std::invalid_argument("Load map requires beta 40--110 deg");
+                        const int approach =
+                            std::abs(target.beta - pose.beta) < 1e-9 ? 0 : direction;
+                        add(pose, target, 2, 1, 0, 0, 0, validation);
+                        pose = target;
+                        add(pose, pose, config_.load_hold_s, 10, 0, 0, 0, validation, -1, approach);
+                    }
+            for (bool validation : {false, true})
+                for (double half_period : {60.0, 15.0}) {
+                    add(pose, {theta, 110 * rad}, half_period, 11, 0, 0, 0, validation, -1, 1);
+                    pose = segments_.back().to;
+                    add(pose, {theta, 40 * rad}, half_period, 11, 0, 0, 0, validation, -1, -1);
+                    pose = segments_.back().to;
+                }
         } else
             throw std::invalid_argument("Unknown joint sweep mode");
     }
@@ -248,6 +315,24 @@ public:
         out.segment = static_cast<int>(index);
         out.kind = s.kind;
         out.validation = s.validation;
+        out.probe_axis = s.probe_axis;
+        out.direction = s.direction;
+        if (s.kind == 9) {
+            const double h0 = hip_zero_ + hip_sign_ * s.from.theta;
+            const double h1 = hip_zero_ + hip_sign_ * s.to.theta;
+            const std::array from{h0, h0 + geometry_.at(s.from.beta).position};
+            const std::array to{h1, h1 + geometry_.at(s.to.beta).position};
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                const auto value = sweep_turn(from[axis], to[axis], t, s.duration, .2);
+                out.q[axis] = value.q;
+                out.dq[axis] = value.dq;
+                out.ddq[axis] = value.ddq;
+            }
+            out.theta = (out.q[0] - hip_zero_) / hip_sign_;
+            out.beta = geometry_.beta(out.q[1] - out.q[0]).value();
+            out.dtheta = out.dq[0] / hip_sign_;
+            out.dbeta = (out.dq[1] - out.dq[0]) / geometry_.at(out.beta).first;
+        }
         if (s.kind == 0) {
             for (std::size_t i = 0; i < 2; ++i) {
                 const auto blend = sweep_blend(initial_[i], out.q[i], t, s.duration);
@@ -269,12 +354,21 @@ public:
     static constexpr double pi = std::numbers::pi, rad = pi / 180;
 
 private:
+    Pose motor_offset(Pose pose, int axis, double offset) const {
+        const double delta = geometry_.at(pose.beta).position + (axis == 0 ? -offset : offset);
+        const auto beta = geometry_.beta(delta);
+        if (!beta)
+            throw std::invalid_argument("Friction stroke leaves calibrated geometry");
+        return {pose.theta + (axis == 0 ? offset / hip_sign_ : 0), *beta};
+    }
+
     void
         add(Pose from, Pose to, double duration, int kind, double amplitude = 0, double f0 = 0,
-            double f1 = 0, bool validation = false) {
+            double f1 = 0, bool validation = false, int axis = -1, int direction = 0) {
         geometry_.at(from.beta);
         geometry_.at(to.beta);
-        segments_.push_back({from, to, duration_, duration, kind, amplitude, f0, f1, validation});
+        segments_.push_back(
+            {from, to, duration_, duration, kind, amplitude, f0, f1, validation, axis, direction});
         duration_ += duration;
     }
     PairGeometry geometry_;

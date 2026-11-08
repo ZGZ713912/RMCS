@@ -1,0 +1,7 @@
+frequency_sweep:
+  ros__parameters:
+    joint_mode: 5
+    joint_load_hold_s: 12.0
+value_collector:
+  ros__parameters:
+    csv_path: "/tmp/wheel_leg_joints_load_<timestamp>.csv"

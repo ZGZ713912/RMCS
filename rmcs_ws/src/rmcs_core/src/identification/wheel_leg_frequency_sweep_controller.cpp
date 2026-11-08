@@ -16,6 +16,7 @@
 #include <rmcs_utility/rclcpp/node_mixin.hpp>
 
 #include "controller/pid/position_velocity_p.hpp"
+#include "identification/wheel_leg_breakaway_probe.hpp"
 #include "identification/wheel_leg_identification_axes.hpp"
 #include "identification/wheel_leg_limit_probe.hpp"
 #include "identification/wheel_leg_load_compensation.hpp"
@@ -43,8 +44,8 @@ public:
         load_parameters();
         if (kind_ == 2
             && (get_parameter("joint_mode").as_int() < 1
-                || get_parameter("joint_mode").as_int() > 3))
-            throw std::invalid_argument("joint_mode must be 1, 2 or 3");
+                || get_parameter("joint_mode").as_int() > 5))
+            throw std::invalid_argument("joint_mode must be 1--5");
         register_input("/predefined/update_rate", update_rate_);
         register_input("/predefined/update_count", tick_);
         register_input("/predefined/timestamp", scheduled_time_);
@@ -84,12 +85,25 @@ public:
         register_output("/wheel_leg/sweep/drives_ready", drives_ready_output_, false);
         register_output("/wheel_leg/sweep/feedback_diagnostic", feedback_diagnostic_, 0);
         register_output("/wheel_leg/sweep/reference_active", reference_active_, false);
+        register_output("/wheel_leg/sweep/fixture", fixture_output_, fixture_);
+        const auto contract = get_parameter_or<std::int64_t>("joint_contract_id", 0);
+        if (contract < 0)
+            throw std::invalid_argument("joint_contract_id must be nonnegative");
+        register_output(
+            "/wheel_leg/sweep/contract_id", contract_id_, static_cast<std::uint64_t>(contract));
+        register_output("/wheel_leg/sweep/probe_axis", probe_axis_output_, -1);
+        register_output("/wheel_leg/sweep/approach_direction", direction_output_, 0);
+        register_output("/wheel_leg/sweep/breakaway_phase", breakaway_phase_, 0);
+        register_output("/wheel_leg/sweep/breakaway_bias_model_nm", breakaway_bias_, 0.0);
+        register_output("/wheel_leg/sweep/breakaway_origin_rad", breakaway_origin_, 0.0);
+        register_output("/wheel_leg/sweep/breakaway_event_elapsed_s", breakaway_event_, -1.0);
         register_output(
             "/wheel_leg/sweep/excitation_revision", excitation_revision_,
-            kind_ == 1 && get_parameter_or("wheel_real2sim", false) ? 6
-            : kind_ == 1 && wheel_top_speed_ > 0                    ? 5
-            : kind_ == 2                                            ? 7
-                                                                    : 4);
+            kind_ == 1 && get_parameter_or("wheel_real2sim", false)   ? 6
+            : kind_ == 1 && wheel_top_speed_ > 0                      ? 5
+            : kind_ == 2 && get_parameter("joint_mode").as_int() >= 4 ? 8
+            : kind_ == 2                                              ? 7
+                                                                      : 4);
         register_output("/wheel_leg/sweep/wheel_high_speed", wheel_high_speed_stage_, false);
         register_output(
             "/wheel_leg/sweep/wheel_high_speed_target_rad_s", wheel_top_speed_output_,
@@ -158,6 +172,7 @@ public:
             register_output(out + "/saturated", saturated_[i], false);
             register_output(out + "/diagnostic_flags", diagnostic_[i], std::uint32_t{0});
             if (i < 4) {
+                register_output(out + "/model_sign", model_sign_output_[i], model_sign_[i]);
                 register_input(motor + "/status_code", status_[i]);
                 register_input(motor + "/fault_code", fault_[i]);
             }
@@ -266,6 +281,8 @@ public:
             }
         }
         if (started) {
+            breakaway_.reset();
+            breakaway_stage_ = -1;
             for (auto& compensation : load_compensation_)
                 compensation.reset();
             *actual_beta_min_ = *actual_beta_max_ = nan;
@@ -281,12 +298,12 @@ public:
             if (kind_ == 2)
                 RCLCPP_INFO(
                     get_logger(),
-                    "Joint excitation-v7 mode=%d duration=%.1f s, control=%s "
+                    "Joint excitation-v%d mode=%d duration=%.1f s, control=%s "
                     "effective PD hip=%.1f/%.2f knee=%.1f/%.2f; "
                     "fast plateau=%.3f rad/s (%.2f s/rev), torque probes in waveform=3/6/7.",
-                    session_.mode, joint_plan_->duration(), cascade_pp_ ? "cascade_pp" : "pd",
-                    kp_[0], kd_[0], kp_[1], kd_[1], 2 * std::numbers::pi / fast_turn_period_,
-                    fast_turn_period_);
+                    *excitation_revision_, session_.mode, joint_plan_->duration(),
+                    cascade_pp_ ? "cascade_pp" : "pd", kp_[0], kd_[0], kp_[1], kd_[1],
+                    2 * std::numbers::pi / fast_turn_period_, fast_turn_period_);
             if (kind_ == 3)
                 probe_->start(now, selected_angles());
         }
@@ -338,6 +355,8 @@ public:
             if (!std::isfinite(*preclip_[i]) || !std::isfinite(*torque_[i]))
                 session_.fault(SweepStop::kNonfinite);
         if (session_.state != SweepState::kRunning) {
+            breakaway_.reset();
+            breakaway_stage_ = -1;
             for (auto& compensation : load_compensation_)
                 compensation.reset();
             *reference_active_ = false;
@@ -366,6 +385,12 @@ public:
         *mode_ = session_.mode;
         *run_ = session_.run_id;
         *completed_ = session_.completed;
+        *breakaway_phase_ = breakaway_.phase;
+        *breakaway_bias_ = breakaway_.bias_nm;
+        *breakaway_origin_ = breakaway_.origin;
+        *breakaway_event_ = breakaway_.event_elapsed_s;
+        *probe_axis_output_ = session_.state == SweepState::kRunning ? reference_.probe_axis : -1;
+        *direction_output_ = session_.state == SweepState::kRunning ? reference_.direction : 0;
         *drives_ready_output_ = ready;
         log_transition();
         log_stage();
@@ -611,6 +636,10 @@ private:
             }
             copy("joint_torque_limit_nm", torque_cap_);
             if (kind_ == 2) {
+                const auto fixture = get_parameter_or<std::string>("joint_fixture", "horizontal");
+                if (fixture != "horizontal" && fixture != "vertical")
+                    throw std::invalid_argument("joint_fixture must be horizontal or vertical");
+                fixture_ = fixture == "vertical" ? 1 : 0;
                 copy("joint_load_ki", load_ki_);
                 copy("joint_load_limit_nm", load_limit_);
                 copy("joint_load_rate_nm_s", load_rate_);
@@ -630,6 +659,14 @@ private:
                 copy("joint_probe_torque_nm", plan_config.probe_torque_nm);
                 copy("joint_knee_beta_deg", plan_config.knee_beta_deg);
                 copy("joint_knee_half_periods_s", plan_config.knee_half_periods_s);
+                const auto mode = get_parameter("joint_mode").as_int();
+                if (mode == 4) {
+                    copy("joint_friction_speeds_rad_s", plan_config.friction_speeds);
+                    plan_config.friction_span_rad =
+                        get_parameter("joint_friction_span_rad").as_double();
+                }
+                if (mode == 5)
+                    plan_config.load_hold_s = get_parameter("joint_load_hold_s").as_double();
                 fast_turn_period_ = plan_config.fast_turn_period_s =
                     get_parameter("joint_fast_turn_period_s").as_double();
             }
@@ -641,6 +678,9 @@ private:
                     h, h + geometry_[side_].at(70 * PairGeometry::rad).position};
                 for (int mode : {1, 2, 3})
                     joint_plan_->start(mode, initial, h, beta_min_, beta_max_);
+                joint_plan_->start(
+                    static_cast<int>(get_parameter("joint_mode").as_int()), initial, h, beta_min_,
+                    beta_max_);
             }
             if (kind_ == 3) {
                 WheelLegLimitProbe::Config c;
@@ -783,6 +823,10 @@ private:
             }
         } else {
             *stage_ = reference_.segment;
+            if (reference_.kind != 8) {
+                breakaway_.reset();
+                breakaway_stage_ = -1;
+            }
             if (kind_ == 2) {
                 const auto& segment = joint_plan_->segments()[reference_.segment];
                 *stage_elapsed_ = *reference_elapsed_ - segment.start;
@@ -820,10 +864,30 @@ private:
                 }
                 const double cap = std::min(torque_cap_[i], *max_torque_[axis]);
                 if (kind_ == 2) {
-                    *load_effort_[axis] = load_compensation_[i].update(
-                        *error_[axis], model_effort, cap, *control_dt_, load_ki_[i], load_limit_[i],
-                        load_rate_[i], *velocity_limited_[axis]);
+                    const bool breakaway_axis =
+                        reference_.kind == 8 && reference_.probe_axis == static_cast<int>(i);
+                    *load_effort_[axis] =
+                        breakaway_axis
+                            ? load_compensation_[i].value()
+                            : load_compensation_[i].update(
+                                  *error_[axis], model_effort, cap, *control_dt_, load_ki_[i],
+                                  load_limit_[i], load_rate_[i], *velocity_limited_[axis]);
                     model_effort += *load_effort_[axis];
+                    if (breakaway_axis) {
+                        const double now = static_cast<double>(*control_ns_) * 1e-9;
+                        if (breakaway_stage_ != reference_.segment) {
+                            breakaway_.start(
+                                now, *model_q_[axis], *model_dq_[axis], *error_[axis], model_effort,
+                                reference_.direction);
+                            breakaway_stage_ = reference_.segment;
+                        }
+                        breakaway_.update(
+                            now, *model_q_[axis], *model_dq_[axis], *feedback_sequence_[axis]);
+                        if (breakaway_.phase == 1) {
+                            model_effort = breakaway_.bias_nm + breakaway_.increment_nm;
+                            *probe_torque_[axis] = breakaway_.increment_nm;
+                        }
+                    }
                 }
                 const double requested = model_sign_[axis] * model_effort;
                 *preclip_[axis] = requested;
@@ -875,6 +939,12 @@ private:
     OutputInterface<double> actual_beta_min_, actual_beta_max_;
     OutputInterface<bool> reached_40_;
     std::array<OutputInterface<double>, 6> load_effort_;
+    std::array<OutputInterface<double>, 4> model_sign_output_;
+    OutputInterface<int> fixture_output_, probe_axis_output_, direction_output_, breakaway_phase_;
+    OutputInterface<std::uint64_t> contract_id_;
+    OutputInterface<double> breakaway_bias_, breakaway_origin_, breakaway_event_;
+    WheelLegBreakawayProbe breakaway_;
+    int breakaway_stage_ = -1, fixture_ = 0;
     std::array<WheelLegLoadCompensation, 2> load_compensation_;
     std::array<double, 2> load_ki_{}, load_limit_{}, load_rate_{};
 

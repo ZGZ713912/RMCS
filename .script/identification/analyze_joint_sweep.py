@@ -24,9 +24,11 @@ def read_csv(path):
         header = next(reader)
         needed = [i for i, name in enumerate(header) if name in ("index", "/wheel_leg/dr16_fresh",
                   "/wheel_leg/enable_request", "/wheel_leg/feedback_fresh") or name.startswith(S)
+                  or name == "/predefined/update_count"
                   or name.startswith("/wheel_leg/") and any(name.endswith("/" + suffix) for suffix in
                      ("angle", "velocity", "torque", "control_torque", "tau_frame_api", "tx_kind",
-                      "tx_queued_steady_ns", "feedback_sequence", "feedback_steady_ns", "status_code"))]
+                      "tx_queued_steady_ns", "tx_sequence", "feedback_sequence", "feedback_steady_ns", "status_code",
+                      "fault_code", "temperature_mos", "temperature_rotor"))]
         columns = {header[i]: [] for i in needed}
         incomplete = []
         for line, row in enumerate(reader, 2):
@@ -35,7 +37,7 @@ def read_csv(path):
                 continue
             for i in needed:
                 value = row[i]
-                integer = header[i].endswith(("_ns", "feedback_sequence")) or header[i] == "index"
+                integer = header[i].endswith(("_ns", "feedback_sequence", "tx_sequence", "/update_count", "/contract_id")) or header[i] == "index"
                 columns[header[i]].append(int(value) if integer else float(value))
     return {key: np.asarray(value) for key, value in columns.items()}, incomplete
 
