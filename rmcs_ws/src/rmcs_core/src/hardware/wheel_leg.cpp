@@ -24,6 +24,7 @@
 #include <rmcs_utility/ring_buffer.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
+#include "hardware/device/actuator_latency_trace.hpp"
 #include "hardware/device/bmi088_ekf.hpp"
 #include "hardware/device/board_clock_lifter.hpp"
 #include "hardware/device/can_packet.hpp"
@@ -215,6 +216,21 @@ private:
             }
             command.register_input("/wheel_leg/enable_request", enable_request_);
             command.register_input("/chassis/reset_count", reset_count_);
+            status.register_output(
+                "/wheel_leg/latency/trace_dropped", trace_dropped_, std::uint64_t{0});
+            status.register_output("/wheel_leg/latency/trace_failed", trace_failed_, false);
+            command.register_input("/wheel_leg/latency/stage", latency_stage_, false);
+            command.register_input("/wheel_leg/latency/axis", latency_axis_, false);
+            command.register_input("/wheel_leg/latency/active", latency_active_, false);
+            command.register_input("/wheel_leg/latency/run_id", latency_run_, false);
+            command.register_input("/wheel_leg/latency/control_steady_ns", latency_start_, false);
+            command.register_input("/wheel_leg/latency/control_end_steady_ns", latency_end_, false);
+            command.register_input("/wheel_leg/latency/probe_nm", latency_probe_, false);
+            command.register_input("/wheel_leg/latency/saturated", latency_saturated_, false);
+            command.register_input(
+                "/wheel_leg/rl/latency/pd_action_seq", latency_pd_action_, false);
+            command.register_input("/wheel_leg/rl/latency/pd_start_ns", latency_pd_start_, false);
+            command.register_input("/wheel_leg/rl/latency/pd_end_ns", latency_pd_end_, false);
             const double timeout = status.get_parameter_or("feedback_timeout_s", .04);
             if (!std::isfinite(timeout) || timeout < 0. || timeout > 1.)
                 throw std::invalid_argument("feedback_timeout_s must be finite and in [0,1]");
@@ -229,6 +245,9 @@ private:
                     status.get_logger(), "WheelLeg CAN feedback age warning threshold: %.1f ms",
                     timeout * 1e3);
             configure_motors(status);
+            const auto trace_path = status.get_parameter_or<std::string>("latency_trace_path", "");
+            if (!trace_path.empty())
+                latency_trace_ = std::make_unique<device::ActuatorLatencyTrace>(trace_path);
             auto options = librmcs::board::AdvancedOptions{};
             options.dangerously_skip_version_checks = true;
             board_ = std::make_unique<librmcs::board::RmcsBoardLite>(*this, serial, options);
@@ -237,6 +256,10 @@ private:
         }
         void update() {
             const std::lock_guard lock{status_mutex_};
+            if (latency_trace_) {
+                *trace_dropped_ = latency_trace_->dropped();
+                *trace_failed_ = latency_trace_->failed();
+            }
             update_motor_status();
             gimbal_yaw_motor_.update_status();
             *yaw_feedback_output_ =
@@ -273,6 +296,23 @@ private:
             *dr16_fresh_output_ = dr16_fresh();
         }
         void command_update() {
+            const auto batch_start = latency_trace_ ? static_cast<std::uint64_t>(now_ns()) : 0;
+            if (latency_trace_ && latency_pd_action_.ready())
+                latency_trace_->push(
+                    {.event = 5,
+                     .code = *enable_request_ ? 1 : 0,
+                     .sequence = *latency_pd_action_,
+                     .steady_ns = *latency_pd_start_,
+                     .end_steady_ns = *latency_pd_end_});
+            if (latency_trace_ && latency_active_.ready() && *latency_active_)
+                latency_trace_->push(
+                    {.event = 4,
+                     .axis = *latency_axis_,
+                     .code = *latency_stage_ + (*latency_saturated_ ? 100 : 0),
+                     .sequence = *latency_run_,
+                     .steady_ns = *latency_start_,
+                     .end_steady_ns = *latency_end_,
+                     .value = *latency_probe_});
             for (std::size_t i = 0; i < 6; ++i) {
                 *tx_kind_[i] = 0;
                 *tx_torque_[i] = std::numeric_limits<double>::quiet_NaN();
@@ -301,65 +341,90 @@ private:
             const bool wheel_allowed = requested && mit_sent_[0] && mit_sent_[1]
                                     && wheel_leg_dm_pair_enabled(pairs[0])
                                     && wheel_leg_dm_pair_enabled(pairs[1]);
-            auto builder = board_->start_transmit();
-            // M3508 IDs 1/2 are the wheels and ID 3 is the feeder, all behind the
-            // single 0x200 frame on CAN0. This board stays the only 0x200 writer:
-            // a second producer would overwrite the other slots every cycle.
-            const std::array wheel_packets{
-                wheel_motors_[0].generate_command(
-                    wheel_allowed ? wheel_motors_[0].control_torque() : 0.),
-                wheel_motors_[1].generate_command(
-                    wheel_allowed ? wheel_motors_[1].control_torque() : 0.)};
-            auto wheels = device::CanPacket8{
-                wheel_packets[0], wheel_packets[1], device::CanPacket8::PaddingQuarter{},
-                device::CanPacket8::PaddingQuarter{}};
-            if (!status_.gimbal_only_)
-                wheels << feeder_motor_;
-            builder.can_transmit(
-                Spec::kCans.kCan0, {.can_id = 0x200, .can_data = wheels.as_bytes()});
-            for (std::size_t i = 0; i < 2; ++i) {
-                *tx_torque_[4 + i] = wheel_motors_[i].command_frame_torque(wheel_packets[i]);
-                *tx_kind_[4 + i] = 1;
-                *tx_ns_[4 + i] = static_cast<std::uint64_t>(now_ns());
-                ++*tx_sequence_[4 + i];
-            }
-            auto supercap_package = device::CanPacket8{
-                device::CanPacket8::PaddingQuarter{}, device::CanPacket8::PaddingQuarter{},
-                device::CanPacket8::PaddingQuarter{}, supercap_.generate_command()};
-            builder.can_transmit(
-                Spec::kCans.kCan0, {.can_id = 0x1FE, .can_data = supercap_package.as_bytes()});
-            // Same sequence as the DM joints: clear -> run -> torque, zero torque while disabled.
-            const auto gimbal_action = gimbal_yaw_scheduler_.next(
-                gimbal_requested, lk_feedback(gimbal_yaw_motor_, gimbal_yaw_error_ns_),
-                LkDriveClock::now());
-            if (auto packet = lk_command(gimbal_yaw_motor_, gimbal_action))
+            {
+                auto builder = board_->start_transmit();
+                // M3508 IDs 1/2 are the wheels and ID 3 is the feeder, all behind the
+                // single 0x200 frame on CAN0. This board stays the only 0x200 writer:
+                // a second producer would overwrite the other slots every cycle.
+                const std::array wheel_packets{
+                    wheel_motors_[0].generate_command(
+                        wheel_allowed ? wheel_motors_[0].control_torque() : 0.),
+                    wheel_motors_[1].generate_command(
+                        wheel_allowed ? wheel_motors_[1].control_torque() : 0.)};
+                auto wheels = device::CanPacket8{
+                    wheel_packets[0], wheel_packets[1], device::CanPacket8::PaddingQuarter{},
+                    device::CanPacket8::PaddingQuarter{}};
+                if (!status_.gimbal_only_)
+                    wheels << feeder_motor_;
                 builder.can_transmit(
-                    Spec::kCans.kCan3, {.can_id = 0x141, .can_data = packet->as_bytes()});
-            WheelLegDmSideSchedulers::dispatch(
-                actions, {0, 2, 1, 3}, [&](std::size_t axis, Action action) {
-                    const auto side = axis / 2;
-                    const auto& motor = axis % 2 == 0 ? hip_motors_[side] : knee_motors_[side];
-                    auto packet = joint_command(motor, action, available);
+                    Spec::kCans.kCan0, {.can_id = 0x200, .can_data = wheels.as_bytes()});
+                for (std::size_t i = 0; i < 2; ++i) {
+                    *tx_torque_[4 + i] = wheel_motors_[i].command_frame_torque(wheel_packets[i]);
+                    *tx_kind_[4 + i] = 1;
+                    *tx_ns_[4 + i] = static_cast<std::uint64_t>(now_ns());
+                    ++*tx_sequence_[4 + i];
+                    if (latency_trace_)
+                        latency_trace_->push(
+                            {.event = 1,
+                             .axis = static_cast<int>(4 + i),
+                             .code = 1,
+                             .sequence = *tx_sequence_[4 + i],
+                             .steady_ns = *tx_ns_[4 + i],
+                             .value = *tx_torque_[4 + i]});
+                }
+                auto supercap_package = device::CanPacket8{
+                    device::CanPacket8::PaddingQuarter{}, device::CanPacket8::PaddingQuarter{},
+                    device::CanPacket8::PaddingQuarter{}, supercap_.generate_command()};
+                builder.can_transmit(
+                    Spec::kCans.kCan0, {.can_id = 0x1FE, .can_data = supercap_package.as_bytes()});
+                // Same sequence as the DM joints: clear -> run -> torque, zero torque while
+                // disabled.
+                const auto gimbal_action = gimbal_yaw_scheduler_.next(
+                    gimbal_requested, lk_feedback(gimbal_yaw_motor_, gimbal_yaw_error_ns_),
+                    LkDriveClock::now());
+                if (auto packet = lk_command(gimbal_yaw_motor_, gimbal_action))
                     builder.can_transmit(
-                        axis % 2 == 0 ? Spec::kCans.kCan1 : Spec::kCans.kCan2,
-                        {.can_id = motor.send_id(), .can_data = packet.as_bytes()});
-                    const bool torque_frame = action != Action::kClearError
-                                           && action != Action::kEnable
-                                           && action != Action::kDisable;
-                    *tx_kind_[axis] = torque_frame               ? 1
-                                    : action == Action::kEnable  ? 2
-                                    : action == Action::kDisable ? 3
-                                                                 : 4;
-                    *tx_torque_[axis] = torque_frame ? motor.command_frame_torque(packet)
-                                                     : std::numeric_limits<double>::quiet_NaN();
-                    *tx_ns_[axis] = static_cast<std::uint64_t>(now_ns());
-                    ++*tx_sequence_[axis];
-                });
-            for (int side = 0; side < 2; ++side) {
-                if (requested && available && actions[side] == Action::kMit)
-                    mit_sent_[side] = true;
-                enabled_[side] = requested;
+                        Spec::kCans.kCan3, {.can_id = 0x141, .can_data = packet->as_bytes()});
+                WheelLegDmSideSchedulers::dispatch(
+                    actions, {0, 2, 1, 3}, [&](std::size_t axis, Action action) {
+                        const auto side = axis / 2;
+                        const auto& motor = axis % 2 == 0 ? hip_motors_[side] : knee_motors_[side];
+                        auto packet = joint_command(motor, action, available);
+                        builder.can_transmit(
+                            axis % 2 == 0 ? Spec::kCans.kCan1 : Spec::kCans.kCan2,
+                            {.can_id = motor.send_id(), .can_data = packet.as_bytes()});
+                        const bool torque_frame = action != Action::kClearError
+                                               && action != Action::kEnable
+                                               && action != Action::kDisable;
+                        *tx_kind_[axis] = torque_frame               ? 1
+                                        : action == Action::kEnable  ? 2
+                                        : action == Action::kDisable ? 3
+                                                                     : 4;
+                        *tx_torque_[axis] = torque_frame ? motor.command_frame_torque(packet)
+                                                         : std::numeric_limits<double>::quiet_NaN();
+                        *tx_ns_[axis] = static_cast<std::uint64_t>(now_ns());
+                        ++*tx_sequence_[axis];
+                        if (latency_trace_)
+                            latency_trace_->push(
+                                {.event = 1,
+                                 .axis = static_cast<int>(axis),
+                                 .code = *tx_kind_[axis],
+                                 .sequence = *tx_sequence_[axis],
+                                 .steady_ns = *tx_ns_[axis],
+                                 .value = *tx_torque_[axis]});
+                    });
+                for (int side = 0; side < 2; ++side) {
+                    if (requested && available && actions[side] == Action::kMit)
+                        mit_sent_[side] = true;
+                    enabled_[side] = requested;
+                }
             }
+            if (latency_trace_)
+                latency_trace_->push(
+                    {.event = 3,
+                     .sequence = ++latency_batch_sequence_,
+                     .steady_ns = batch_start,
+                     .end_steady_ns = static_cast<std::uint64_t>(now_ns())});
         }
         // Called with status_mutex_ held.
         [[nodiscard]] std::string readiness_text() const {
@@ -730,8 +795,21 @@ private:
                 if (!motors[side].matches_feedback(data.can_id, data.can_data))
                     continue;
                 const auto index = offset + side;
-                motor_feedback_[index].publish(
-                    device::CanPacket8{data.can_data}, static_cast<std::uint64_t>(now_ns()));
+                const auto received_ns = static_cast<std::uint64_t>(now_ns());
+                const auto packet = device::CanPacket8{data.can_data};
+                motor_feedback_[index].publish(packet, received_ns);
+                if (latency_trace_) {
+                    constexpr std::array axes{4, 5, 0, 2, 1, 3};
+                    const int code =
+                        offset == 0 ? 0 : static_cast<std::uint8_t>(data.can_data[0]) >> 4;
+                    latency_trace_->push(
+                        {.event = 2,
+                         .axis = axes[index],
+                         .code = code,
+                         .sequence = ++latency_rx_sequence_[index],
+                         .steady_ns = received_ns,
+                         .value = motors[side].feedback_frame_torque(packet)});
+                }
                 return true;
             }
             return false;
@@ -849,6 +927,17 @@ private:
         enum class FeedbackWarningState { kFresh, kMissing, kStale };
         FeedbackWarningState feedback_warning_state_ = FeedbackWarningState::kFresh;
         bool previous_both_down_ = false;
+        OutputInterface<std::uint64_t> trace_dropped_;
+        OutputInterface<bool> trace_failed_;
+        InputInterface<int> latency_stage_, latency_axis_;
+        InputInterface<bool> latency_active_, latency_saturated_;
+        InputInterface<std::uint64_t> latency_run_, latency_start_, latency_end_;
+        InputInterface<double> latency_probe_;
+        InputInterface<std::size_t> latency_pd_action_;
+        InputInterface<std::uint64_t> latency_pd_start_, latency_pd_end_;
+        std::array<std::atomic<std::uint64_t>, 6> latency_rx_sequence_{};
+        std::uint64_t latency_batch_sequence_ = 0;
+        std::unique_ptr<device::ActuatorLatencyTrace> latency_trace_;
         std::unique_ptr<librmcs::board::RmcsBoardLite> board_;
     };
 

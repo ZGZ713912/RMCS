@@ -177,6 +177,11 @@ public:
 
     void update_status() { update_status(can_data_.load(std::memory_order_relaxed)); }
 
+    double feedback_frame_torque(CanPacket8 packet) const {
+        const auto feedback = std::bit_cast<DjiMotorFeedback>(packet);
+        return raw_current_to_torque_coefficient_ * static_cast<double>(feedback.current);
+    }
+
     void update_status(CanPacket8 packet) {
         const auto feedback = std::bit_cast<DjiMotorFeedback>(packet);
 

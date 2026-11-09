@@ -50,6 +50,12 @@ if(BUILD_TESTING)
     target_link_libraries(wheel_leg_sweep_plan ${PROJECT_NAME})
     ament_add_gtest(wheel_leg_cascade_pp test/wheel_leg_cascade_pp.cpp)
     target_include_directories(wheel_leg_cascade_pp PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    ament_add_gtest(wheel_leg_latency test/wheel_leg_latency.cpp)
+    target_include_directories(wheel_leg_latency PRIVATE
+        ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/../rmcs_executor/src)
+    target_compile_definitions(wheel_leg_latency PRIVATE
+        RMCS_BRINGUP_CONFIG_DIR="${PROJECT_SOURCE_DIR}/../rmcs_bringup/config")
+    target_link_libraries(wheel_leg_latency ${PROJECT_NAME})
 endif()
 
 ament_auto_package()

@@ -1,7 +1,9 @@
 #include "wheel_leg/policy/selection.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <eigen3/Eigen/Core>
 #include <optional>
 #include <rclcpp/node.hpp>
@@ -37,6 +39,13 @@ public:
         register_input("/predefined/update_rate", rate_);
         register_output("/wheel_leg/rl/input/frame", frame_, std::vector<double>(35, 0.));
         register_output("/wheel_leg/rl/input/frame_sequence", sequence_, std::size_t{0});
+        register_output("/wheel_leg/rl/input/frame_steady_ns", frame_ns_, std::uint64_t{0});
+        register_output("/wheel_leg/rl/input/frame_source_oldest_ns", oldest_ns_, std::uint64_t{0});
+        for (int i = 0; i < 6; ++i)
+            register_input(
+                std::string{"/wheel_leg/"} + kMotorNames[i] + "/feedback_steady_ns", source_ns_[i],
+                false);
+        register_input("/wheel_leg/imu/last_steady_ns", source_ns_[6], false);
     }
     void update() override {
         if (*reset_ != last_reset_ || (!*enable_ && was_enabled_)
@@ -45,6 +54,7 @@ public:
             last_tick_.reset();
             std::fill(frame_->begin(), frame_->end(), 0.);
             *sequence_ = 0;
+            *frame_ns_ = *oldest_ns_ = 0;
             last_reset_ = *reset_;
         }
         was_enabled_ = *enable_;
@@ -77,6 +87,12 @@ public:
             return;
         }
         std::copy(frame->begin(), frame->end(), frame_->begin());
+        *frame_ns_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+        *oldest_ns_ = *frame_ns_;
+        for (const auto& source : source_ns_)
+            *oldest_ns_ = std::min(*oldest_ns_, source.ready() ? *source : std::uint64_t{0});
         *sequence_ = policy_tick_;
     }
 
@@ -91,6 +107,8 @@ private:
     InputInterface<std::size_t> reset_, tick_;
     OutputInterface<std::vector<double>> frame_;
     OutputInterface<std::size_t> sequence_;
+    OutputInterface<std::uint64_t> frame_ns_, oldest_ns_;
+    std::array<InputInterface<std::uint64_t>, 7> source_ns_;
     std::optional<std::size_t> last_tick_;
     std::size_t policy_tick_ = 0, last_reset_ = 0;
     int last_state_ = 0;

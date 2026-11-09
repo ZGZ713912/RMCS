@@ -179,6 +179,13 @@ public:
 
     void update_status() { update_status(can_data_.load(std::memory_order_relaxed)); }
 
+    double feedback_frame_torque(CanPacket8 packet) const {
+        const auto bytes = packet.as_bytes();
+        const auto encoded = ((static_cast<std::uint8_t>(bytes[4]) & 0x0F) << 8)
+                           | static_cast<std::uint8_t>(bytes[5]);
+        return (reversed_ ? -1. : 1.) * uint_to_float(encoded, -torque_max_, torque_max_, 12);
+    }
+
     void update_status(CanPacket8 packet) {
         const auto bytes = packet.as_bytes();
 

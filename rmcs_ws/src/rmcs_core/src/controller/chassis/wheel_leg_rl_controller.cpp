@@ -66,6 +66,17 @@ public:
         register_output("/wheel_leg/rl/input/height", policy_height_, .305);
         register_output("/wheel_leg/rl/applied_action", applied_, JointVector{});
         register_output("/wheel_leg/rl/action_applied", action_applied_, false);
+        register_output(
+            "/wheel_leg/rl/latency/accepted_action_seq", accepted_output_, std::size_t{0});
+        register_output("/wheel_leg/rl/latency/action_accept_ns", accept_ns_, std::uint64_t{0});
+        register_output("/wheel_leg/rl/latency/pd_sequence", pd_sequence_, std::uint64_t{0});
+        register_output("/wheel_leg/rl/latency/pd_action_seq", pd_action_, std::size_t{0});
+        register_output("/wheel_leg/rl/latency/pd_start_ns", pd_start_ns_, std::uint64_t{0});
+        register_output("/wheel_leg/rl/latency/pd_end_ns", pd_end_ns_, std::uint64_t{0});
+        register_output(
+            "/wheel_leg/rl/latency/first_pd_action_seq", first_pd_action_, std::size_t{0});
+        register_output("/wheel_leg/rl/latency/first_pd_ns", first_pd_ns_, std::uint64_t{0});
+        register_output("/wheel_leg/rl/latency/replaced_before_pd", replaced_, std::uint64_t{0});
         register_output("/wheel_leg/rl/state", state_, 0);
         register_output("/wheel_leg/rl/fault_latched", fault_, false);
         register_output("/wheel_leg/recovery/phase", recovery_phase_, 0);
@@ -197,6 +208,10 @@ public:
             }
             accepted_sequence_ = *action_sequence_;
             accepted_stamp_ = *action_stamp_;
+            if (have_target_ && *first_pd_action_ != *accepted_output_)
+                ++*replaced_;
+            *accepted_output_ = accepted_sequence_;
+            *accept_ns_ = steady_ns();
             have_target_ = true;
         }
         const auto now = Clock::now();
@@ -268,6 +283,7 @@ public:
             RCLCPP_INFO(get_logger(), "Self-righting handover: policy owns all six axes");
         }
         if (have_target_) {
+            *pd_start_ns_ = steady_ns();
             const auto torque = JointSolver::pd(
                 target_, *q_, *dq_, policy_.leg_kp, policy_.leg_kd, policy_.gas_gain);
             if (!write_effort(torque))
@@ -275,11 +291,22 @@ public:
             *applied_ = pending_history_;
             *action_applied_ = true;
             last_pd_ = *tick_;
+            *pd_end_ns_ = steady_ns();
+            *pd_action_ = accepted_sequence_;
+            ++*pd_sequence_;
+            if (*first_pd_action_ != accepted_sequence_) {
+                *first_pd_action_ = accepted_sequence_;
+                *first_pd_ns_ = *pd_end_ns_;
+            }
         }
     }
 
 private:
     using Clock = std::chrono::steady_clock;
+    static std::uint64_t steady_ns() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch())
+            .count();
+    }
     wheel_leg::JointReferenceRecoveryConfig recovery_configuration() {
         auto config = wheel_leg::make_recovery_config();
         config.prepare_speed_rad_s = get_parameter_or("self_righting.fold_plant_speed_rad_s", 2.);
@@ -301,6 +328,9 @@ private:
         *policy_enable_ = false;
         *applied_ = JointVector{};
         *action_applied_ = false;
+        *accepted_output_ = *pd_action_ = *first_pd_action_ = 0;
+        *accept_ns_ = *pd_start_ns_ = *pd_end_ns_ = *first_pd_ns_ = 0;
+        *pd_sequence_ = *replaced_ = 0;
         *policy_command_ = Eigen::Vector3d::Zero();
         *policy_height_ = .305;
         *state_ = 1;
@@ -390,6 +420,9 @@ private:
     InputInterface<bool> valid_, drives_ready_, requested_, simulation_;
     InputInterface<std::size_t> reset_, tick_, action_sequence_;
     InputInterface<std::uint64_t> action_stamp_;
+    OutputInterface<std::size_t> accepted_output_, pd_action_, first_pd_action_;
+    OutputInterface<std::uint64_t> accept_ns_, pd_sequence_, pd_start_ns_, pd_end_ns_, first_pd_ns_,
+        replaced_;
     InputInterface<std::string> model_spec_, observation_sha_;
     std::array<InputInterface<double>, 6> caps_, action_, action_scale_, action_min_, action_max_;
     std::array<OutputInterface<double>, 6> effort_;
