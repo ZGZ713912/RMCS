@@ -38,9 +38,6 @@ class MyLaunchDescriptionEntity(LaunchDescriptionEntity):
         )
         parameters = []
         if robot_name in {
-            "wheel-leg-joints-turn-sweep",
-            "wheel-leg-joints-knee-sweep",
-            "wheel-leg-joints-coupled-sweep",
             "wheel-leg-joints-friction-sweep",
             "wheel-leg-joints-load-sweep",
         }:

@@ -46,9 +46,10 @@ ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-wheels-sweep
 | `wheel-leg-joints-load-sweep` | 装机负载双向保持与两档慢速开合 | 753 s |
 
 例如 `ros2 launch rmcs_bringup rmcs.launch.py robot:=wheel-leg-joints-knee-sweep`。
-launch 先加载公共 `wheel-leg-joints-sweep.yaml`，再加载所选项目 YAML，覆盖 `joint_mode` 和 CSV 文件名。
-公共配置中的 `side: left/right` 选择侧别；直接启动旧名称 `wheel-leg-joints-sweep` 默认也是项目 2。
-项目文件是覆盖配置，不应单独直接传给执行器而省略公共配置。
+上述三个 YAML 均为完整独立配置，包含组件、硬件、控制和 CSV 参数；launch 只加载所选文件。
+直接在所选 YAML 的 `frequency_sweep.ros__parameters.side: left/right` 选择侧别，
+在同一文件设置 `joint_fixture: horizontal/vertical`。不再继承 `wheel-leg-joints-sweep.yaml`。
+旧名称 `wheel-leg-joints-sweep` 保留为项目 2 的独立入口；静摩擦/静态负载入口的加载方式不受此次调整影响。
 
 双中立即运行所选项目，其他有效档位零力矩待机，双下失能复位，丢控立即关闭。
 完成后保持零力矩，必须双下复位再双中才可重新运行；仅切换其他档位不能解除完成锁存。
